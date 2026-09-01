@@ -4,10 +4,8 @@ import numpy as np
 import itertools
 from timm import create_model
 import networkx as nx
-import json
 
 import random
-import scipy.sparse as sp
 from sklearn import metrics
 
 from wildlife_tools.data import WildlifeDataset
@@ -16,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from wildlife_tools.train import ArcFaceLoss, SoftmaxLoss, TripletLoss, BasicTrainer
+from wildlife_tools.train import BasicTrainer
 
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import cdist
@@ -25,11 +23,9 @@ from tqdm import tqdm
 import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import roc_auc_score
-from typing import Optional, List, Tuple, Callable, Any, Dict, Union
-from wildlife_datasets import datasets, metrics, splits
+from typing import Optional, List, Tuple, Callable, Union
+from wildlife_datasets import metrics
 from wildlife_tools.similarity import CosineSimilarity
 from collections import defaultdict
 
@@ -42,7 +38,9 @@ def get_main_args():
     # parser.add_argument("--dataset_path", type=str, default="/mnt/nas/users/depanshus/WildlifeDatasets/")
     parser.add_argument("--dataset_path", type=str, default="/storage/dd25007/dataset/")
     parser.add_argument("--out_dir", type=str, default="outputs/")
-    parser.add_argument("--model_name", type=str, default="hf-hub:BVRA/MegaDescriptor-L-224")
+    parser.add_argument(
+        "--model_name", type=str, default="hf-hub:BVRA/MegaDescriptor-L-224"
+    )
     parser.add_argument("--backbone", type=str, default="megadescriptor")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--batch_size", type=int, default=32)
@@ -56,22 +54,62 @@ def get_main_args():
     parser.add_argument("--sampler", default="random")
     parser.add_argument("--min_samples", type=int, default=5, help="minPts for CDBSCAN")
     parser.add_argument("--thresh", type=float, default=0.1, help="eps for CDBSCAN")
-    parser.add_argument("--sampling_ratio", type=float, default=1.0, help="ratio of neighbors vs vertices (CC method: Perez et al., ECCV 2024)")
+    parser.add_argument(
+        "--sampling_ratio",
+        type=float,
+        default=1.0,
+        help="ratio of neighbors vs vertices (CC method: Perez et al., ECCV 2024)",
+    )
     # parser.add_argument("--consam_betas", type=str, default="0.5,0.35,0.15", help="comma-separated list of the 3 betas in ConSam, e.g.: 0.5,0.35,0.15")
-    parser.add_argument("--consam_beta1", type=float, default=0.5, help="beta1 in ConSam")
-    parser.add_argument("--consam_beta2", type=float, default=0.35, help="beta2 in ConSam")
-    parser.add_argument("--consam_beta3", type=float, default=0.15, help="beta3 in ConSam")
+    parser.add_argument(
+        "--consam_beta1", type=float, default=0.5, help="beta1 in ConSam"
+    )
+    parser.add_argument(
+        "--consam_beta2", type=float, default=0.35, help="beta2 in ConSam"
+    )
+    parser.add_argument(
+        "--consam_beta3", type=float, default=0.15, help="beta3 in ConSam"
+    )
     parser.add_argument("--consam_eps", type=float, default=0.05)
-    parser.add_argument("--eval_over_all_ids", action="store_true", help="evaluate over all ids in the dataset")
-    parser.add_argument("--no_sweep", action="store_true", help="use for sweep on purity ratio")
-    parser.add_argument("--run_val", action="store_true", help="run validation at each step during training")
-    parser.add_argument("--adaptive", action="store_true", help="use adaptive ConSam sampling")
-    parser.add_argument("--lambda_", type=float, default=3.0, help="lambda for adaptive ConSam sampling")
+    parser.add_argument(
+        "--eval_over_all_ids",
+        action="store_true",
+        help="evaluate over all ids in the dataset",
+    )
+    parser.add_argument(
+        "--no_sweep", action="store_true", help="use for sweep on purity ratio"
+    )
+    parser.add_argument(
+        "--run_val",
+        action="store_true",
+        help="run validation at each step during training",
+    )
+    parser.add_argument(
+        "--adaptive", action="store_true", help="use adaptive ConSam sampling"
+    )
+    parser.add_argument(
+        "--lambda_", type=float, default=3.0, help="lambda for adaptive ConSam sampling"
+    )
     parser.add_argument("--metric", type=str, default="cosine")
-    parser.add_argument("--loss_criterion", type=str, default="softmax", choices=["arcface", "softmax", "triplet"])
+    parser.add_argument(
+        "--loss_criterion",
+        type=str,
+        default="softmax",
+        choices=["arcface", "softmax", "triplet"],
+    )
     parser.add_argument("--gallery_size", type=int, default=2)
-    parser.add_argument("--num_splits", type=int, default=5, help="number of query/gallery splits for evaluation")
-    parser.add_argument("--images_per_id", type=int, default=1, help="number of images per id in gallery (evaluation)")
+    parser.add_argument(
+        "--num_splits",
+        type=int,
+        default=5,
+        help="number of query/gallery splits for evaluation",
+    )
+    parser.add_argument(
+        "--images_per_id",
+        type=int,
+        default=1,
+        help="number of images per id in gallery (evaluation)",
+    )
     parser.add_argument("--sample_seed", type=int, default=0, help="seed for sampling")
     parser.add_argument("--momentum", type=float, default=0.2)
     args = parser.parse_args()
@@ -90,8 +128,16 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
-                           ml_pairs=[], cl_pairs=[], sanity_check=False):
+def constrained_clustering(
+    X,
+    method,
+    eps=0.2,
+    min_samples=5,
+    metric="cosine",
+    ml_pairs=[],
+    cl_pairs=[],
+    sanity_check=False,
+):
 
     if metric == "precomputed":
         X = torch.tensor(X, dtype=torch.float32)
@@ -105,8 +151,17 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
         initial_rank = None
     if method == "DBSCAN":
         from sklearn.cluster import DBSCAN
-        rerank_dist = rerank_dist.cpu().numpy() if isinstance(rerank_dist, torch.Tensor) else rerank_dist
-        labels = DBSCAN(eps=eps, min_samples=min_samples, metric=metric).fit(rerank_dist).labels_
+
+        rerank_dist = (
+            rerank_dist.cpu().numpy()
+            if isinstance(rerank_dist, torch.Tensor)
+            else rerank_dist
+        )
+        labels = (
+            DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
+            .fit(rerank_dist)
+            .labels_
+        )
     elif method == "FINCH":
         X = X.cpu().numpy() if isinstance(X, torch.Tensor) else X
         labels = FINCH(X, initial_rank=initial_rank)
@@ -122,7 +177,9 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
             metric=metric,
         )
         labels_dbscan = clusters_dbscan.copy()
-        labels_dbscan[labels_dbscan == -1] = np.arange(labels_dbscan.max() + 1, labels_dbscan.max() + 1 + sum(labels_dbscan == -1))
+        labels_dbscan[labels_dbscan == -1] = np.arange(
+            labels_dbscan.max() + 1, labels_dbscan.max() + 1 + sum(labels_dbscan == -1)
+        )
 
         # Get Nearest Neighbor-based (FINCH) clusters
         labels_finch = constrained_clustering(
@@ -158,7 +215,9 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
 
         weak_ml_pairs = ml1.intersection(ml2)
         weak_cl_pairs = cl1.intersection(cl2)
-        inconsistent_pairs = (cl1.union(cl2) - cl1.intersection(cl2)).union(ml1.union(ml2) - ml1.intersection(ml2))
+        inconsistent_pairs = (cl1.union(cl2) - cl1.intersection(cl2)).union(
+            ml1.union(ml2) - ml1.intersection(ml2)
+        )
         weak_cl_pairs = weak_cl_pairs.union(inconsistent_pairs)
         labels = constrained_clustering(
             X=X,
@@ -171,11 +230,10 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
             return labels
     else:
         raise NotImplementedError("Clustering method not implemented")
-        
 
     # Step 1: Merge clusters under Must-Link constraints
     cluster_id = labels.max() + 1
-    for (a, b) in ml_pairs:
+    for a, b in ml_pairs:
         cluster_a = labels[a]
         cluster_b = labels[b]
         if cluster_a == -1 and cluster_b == -1:
@@ -209,11 +267,13 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
             ml_graph.add_edges_from(clust_ml_pairs)
             # Step 2: Find ML components
             ml_components = list(nx.connected_components(ml_graph))
-            comp_map = {pt: idx for idx, comp in enumerate(ml_components) for pt in comp}
+            comp_map = {
+                pt: idx for idx, comp in enumerate(ml_components) for pt in comp
+            }
             # Step 3: Build conflict graph (G_CL)
             conflict_graph = nx.Graph()
             conflict_graph.add_nodes_from(range(len(ml_components)))
-            for (a, b) in clust_cl_pairs:
+            for a, b in clust_cl_pairs:
                 ca, cb = comp_map[a], comp_map[b]
                 if ca != cb:
                     conflict_graph.add_edge(ca, cb)
@@ -224,17 +284,17 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
             comp_to_chromatic = []
             for comp in conflict_graph_comps:
                 subgraph = conflict_graph.subgraph(comp)
-                coloring = nx.coloring.greedy_color(subgraph, strategy='largest_first')
+                coloring = nx.coloring.greedy_color(subgraph, strategy="largest_first")
                 chromatic_number = max(coloring.values()) + 1
                 comp_to_chromatic.append((comp, chromatic_number))
 
             # Sort by chromatic number (descending), break ties by size
             conflict_graph_comps_sorted = sorted(
-                comp_to_chromatic,
-                key=lambda x: (x[1], len(x[0])),
-                reverse=True
+                comp_to_chromatic, key=lambda x: (x[1], len(x[0])), reverse=True
             )
-            conflict_graph_comps_sorted = [comp for comp, _ in conflict_graph_comps_sorted]
+            conflict_graph_comps_sorted = [
+                comp for comp, _ in conflict_graph_comps_sorted
+            ]
 
             # Prepare mapping from component idx to member points
             # Initialize new mapping of cluster_id to list of points
@@ -245,7 +305,7 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
             if len(largest_component) > 1:
                 # Subgraph for largest_component
                 subG = conflict_graph.subgraph(largest_component).copy()
-                coloring = nx.coloring.greedy_color(subG, strategy='largest_first')
+                coloring = nx.coloring.greedy_color(subG, strategy="largest_first")
                 # Assign new cluster IDs
                 for comp_idx, color in coloring.items():
                     sub_id = cluster_id
@@ -261,6 +321,7 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
             for comp_set in conflict_graph_comps_sorted[1:]:
                 from sklearn.metrics import pairwise_distances
                 from scipy.optimize import linear_sum_assignment
+
                 # Build cost matrix: comps in comp_set x existing subclusters
                 existing_ids = list(cluster_id_to_points.keys())
                 m = len(comp_set)
@@ -276,7 +337,9 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
                             sub_dist = rerank_dist[np.ix_(pts_i, pts_j)]
                             cost[i, j] = sub_dist.min()
                         else:
-                            dist_matrix = pairwise_distances(X[pts_i], X[pts_j], metric=metric)
+                            dist_matrix = pairwise_distances(
+                                X[pts_i], X[pts_j], metric=metric
+                            )
                             cost[i, j] = dist_matrix.min()
 
                 # Solve assignment
@@ -303,24 +366,28 @@ def constrained_clustering(X, method, eps=0.2, min_samples=5, metric="cosine",
 
     if sanity_check:
         # Sanity check for constraints
-        for (a, b) in ml_pairs:
+        for a, b in ml_pairs:
             if labels[a] != labels[b]:
                 print(f"{a}, {b}, {labels[[a, b]]}")
                 # import pdb;
                 # pdb.set_trace()
-            assert labels[a] == labels[b], "must-link constraint violated. Implementation error"
-        for (a, b) in cl_pairs:
+            assert (
+                labels[a] == labels[b]
+            ), "must-link constraint violated. Implementation error"
+        for a, b in cl_pairs:
             if labels[a] == labels[b] and labels[a] != -1:
                 print(f"{a}, {b}, {labels[[a, b]]}")
                 # import pdb;
                 # pdb.set_trace()
-            assert labels[a] != labels[b] or labels[a] == -1, "cannot-link constraint violated. Implementation error"
+            assert (
+                labels[a] != labels[b] or labels[a] == -1
+            ), "cannot-link constraint violated. Implementation error"
     return labels
 
 
-
-
-def CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[], sanity_check=False):
+def CDBSCAN(
+    X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[], sanity_check=False
+):
     n_samples = X.shape[0]
     labels = np.full(n_samples, -1)  # -1 for noise
     cluster_id = 0
@@ -381,15 +448,19 @@ def CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[], sani
             ml_graph.add_edges_from(clust_ml_pairs)
             # Step 2: Find ML components
             ml_components = list(nx.connected_components(ml_graph))
-            comp_map = {pt: idx for idx, comp in enumerate(ml_components) for pt in comp}
+            comp_map = {
+                pt: idx for idx, comp in enumerate(ml_components) for pt in comp
+            }
             # Step 3: Build conflict graph (over components)
             conflict_graph = nx.Graph()
             conflict_graph.add_nodes_from(range(len(ml_components)))
-            for (a, b) in clust_cl_pairs:
+            for a, b in clust_cl_pairs:
                 ca, cb = comp_map[a], comp_map[b]
                 if ca != cb:
                     conflict_graph.add_edge(ca, cb)
-            coloring = nx.coloring.greedy_color(conflict_graph, strategy="largest_first")
+            coloring = nx.coloring.greedy_color(
+                conflict_graph, strategy="largest_first"
+            )
             label_map = {}
             for pt in clust_points:
                 if label_map.get(coloring[comp_map[pt]]) is None:
@@ -408,12 +479,16 @@ def CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[], sani
             points_j = np.where(labels == cj)[0]
             if len(np.intersect1d(leaf_nodes[points_j][0], points_i)) == 0:
                 continue
-            conflict = any((a, b) in cl_set or (b, a) in cl_set
-                           for a, b in itertools.product(points_i, points_j))
+            conflict = any(
+                (a, b) in cl_set or (b, a) in cl_set
+                for a, b in itertools.product(points_i, points_j)
+            )
 
             if not conflict:
                 labels[labels == cj] = ci
-                local_clusters = np.delete(local_clusters, np.argwhere(local_clusters == cj))
+                local_clusters = np.delete(
+                    local_clusters, np.argwhere(local_clusters == cj)
+                )
 
     unique, counts = np.unique(labels, return_counts=True)
     singleton_labels = unique[counts == 1]
@@ -429,19 +504,24 @@ def CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[], sani
 
     if sanity_check:
         # Sanity check for constraints
-        for (a, b) in ml_pairs:
+        for a, b in ml_pairs:
             if labels[a] != labels[b]:
                 print(f"{a}, {b}, {labels[[a,b]]}")
                 # import pdb;
                 # pdb.set_trace()
-            assert labels[a] == labels[b], "must-link constraint violated. Implementation error"
-        for (a, b) in cl_pairs:
+            assert (
+                labels[a] == labels[b]
+            ), "must-link constraint violated. Implementation error"
+        for a, b in cl_pairs:
             if labels[a] == labels[b] and labels[a] != -1:
                 print(f"{a}, {b}, {labels[[a, b]]}")
                 # import pdb;
                 # pdb.set_trace()
-            assert labels[a] != labels[b] or labels[a] == -1, "cannot-link constraint violated. Implementation error"
+            assert (
+                labels[a] != labels[b] or labels[a] == -1
+            ), "cannot-link constraint violated. Implementation error"
     return labels
+
 
 # https://link.springer.com/content/pdf/10.1007/978-3-540-72530-5_25.pdf (Proposed in)
 # https://github.com/johnnylu305/Constrained-DBSCAN-Clustering/blob/main/constrainedDBSCAN.m (Implementation from)
@@ -536,16 +616,22 @@ def _CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[]):
         labels[labels == old] = new
 
     # Sanity check for constraints
-    for (a, b) in ml_pairs:
+    for a, b in ml_pairs:
         if labels[a] != labels[b]:
-            import pdb;
+            import pdb
+
             pdb.set_trace()
-        assert labels[a] == labels[b], "must-link constraint violated. Implementation error"
-    for (a, b) in cl_pairs:
+        assert (
+            labels[a] == labels[b]
+        ), "must-link constraint violated. Implementation error"
+    for a, b in cl_pairs:
         if labels[a] == labels[b] and labels[a] != -1:
-            import pdb;
+            import pdb
+
             pdb.set_trace()
-        assert labels[a] != labels[b] or labels[a] == -1, "cannot-link constraint violated. Implementation error"
+        assert (
+            labels[a] != labels[b] or labels[a] == -1
+        ), "cannot-link constraint violated. Implementation error"
 
     return labels
 
@@ -586,7 +672,9 @@ def constrained_dbscan(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pai
     for a, b in cl_pairs:
         root_a, root_b = uf.find(a), uf.find(b)
         if root_a == root_b:
-            raise ValueError(f"Conflict: {a} and {b} are must-linked but also cannot-linked!")
+            raise ValueError(
+                f"Conflict: {a} and {b} are must-linked but also cannot-linked!"
+            )
         # cl_forbidden[root_a].add(root_b)
         # cl_forbidden[root_b].add(root_a)
 
@@ -629,12 +717,21 @@ def constrained_dbscan(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pai
                     # Add density-connected points (if no cannot-link violation)
                     for q in neighborhoods[p]:
                         # if labels[q] == -1 and uf.find(q) not in cl_forbidden.get(uf.find(p), set()):
-                        if labels[q] == -1 and (p, q) not in cl_pairs and (q, p) not in cl_pairs:
+                        if (
+                            labels[q] == -1
+                            and (p, q) not in cl_pairs
+                            and (q, p) not in cl_pairs
+                        ):
                             # Check if q's closure is forbidden with any point in cluster
                             valid = True
                             for clust_member in np.where(labels == cluster_id)[0]:
-                                for ml_member in {j for j in range(n_samples) if root[j] == root[q]}:
-                                    if (ml_member, clust_member) in cl_pairs or (clust_member, ml_member) in cl_pairs:
+                                for ml_member in {
+                                    j for j in range(n_samples) if root[j] == root[q]
+                                }:
+                                    if (ml_member, clust_member) in cl_pairs or (
+                                        clust_member,
+                                        ml_member,
+                                    ) in cl_pairs:
                                         valid = False
                                         break
                                 if not valid:
@@ -656,31 +753,38 @@ def constrained_dbscan(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pai
         cluster_id += 1
 
     # Sanity check for constraints
-    for (a, b) in ml_pairs:
+    for a, b in ml_pairs:
         if labels[a] != labels[b]:
             print(f"{a}, {b}, {labels[[a, b]]}")
             break
-            import pdb;
+            import pdb
+
             pdb.set_trace()
-        assert labels[a] == labels[b], "must-link constraint violated. Implementation error"
-    for (a, b) in cl_pairs:
+        assert (
+            labels[a] == labels[b]
+        ), "must-link constraint violated. Implementation error"
+    for a, b in cl_pairs:
         if labels[a] == labels[b] and labels[a] != -1:
             print(f"{a}, {b}, {labels[[a, b]]}")
-            import pdb;
+            import pdb
+
             pdb.set_trace()
-        assert labels[a] != labels[b] or labels[a] == -1, "cannot-link constraint violated. Implementation error"
+        assert (
+            labels[a] != labels[b] or labels[a] == -1
+        ), "cannot-link constraint violated. Implementation error"
     return labels
 
 
 def FINCH(
-        data,
-        initial_rank=None,
-        req_clust=None,
-        distance='cosine',
-        ensure_early_exit=True,
-        verbose=True,
-        use_ann_above_samples=70000):
-    """ FINCH clustering algorithm.
+    data,
+    initial_rank=None,
+    req_clust=None,
+    distance="cosine",
+    ensure_early_exit=True,
+    verbose=True,
+    use_ann_above_samples=70000,
+):
+    """FINCH clustering algorithm.
     :param data: Input matrix with features in rows.
     :param initial_rank: Nx1 first integer neighbor indices (optional).
     :param req_clust: Set output number of clusters (optional). Not recommended.
@@ -704,15 +808,14 @@ def FINCH(
     """
 
     from finch.finch import clust_rank, get_clust, get_merge
+
     # Cast input data to float32
     data = data.astype(np.float32)
 
     min_sim = None
-    adj, orig_dist = clust_rank(data,
-                                use_ann_above_samples,
-                                initial_rank,
-                                distance,
-                                verbose)
+    adj, orig_dist = clust_rank(
+        data, use_ann_above_samples, initial_rank, distance, verbose
+    )
     initial_rank = None
     group, num_clust = get_clust(adj, [], min_sim)
     c, mat = get_merge([], group, data)
@@ -782,11 +885,13 @@ class EpochCheckpoint:
     def __call__(self, trainer, **kwargs):
         os.makedirs(self.folder, exist_ok=True)
         if self.verbose:
-            print(f"[{trainer.epoch - 1}/{trainer.epochs}] "
-                  f"Train Loss: {np.round(kwargs['epoch_data']['train_loss_epoch_avg'], 2)} \t |"
-                  f" Train Acc: {np.round(kwargs['epoch_data']['train_acc_epoch_avg']*100, 2)} \t |")
+            print(
+                f"[{trainer.epoch - 1}/{trainer.epochs}] "
+                f"Train Loss: {np.round(kwargs['epoch_data']['train_loss_epoch_avg'], 2)} \t |"
+                f" Train Acc: {np.round(kwargs['epoch_data']['train_acc_epoch_avg']*100, 2)} \t |"
+            )
             # save pseudo-labels
-            pseudo_labels = kwargs['epoch_data']['pseudo_labels']
+            pseudo_labels = kwargs["epoch_data"]["pseudo_labels"]
             # convert map to np.array in order of sorted original indices
             sorted_indices = sorted(pseudo_labels.keys())
             pseudo_labels_array = np.array([pseudo_labels[i] for i in sorted_indices])
@@ -794,11 +899,18 @@ class EpochCheckpoint:
                 self.pseudo_labels_array = pseudo_labels_array
             else:
                 # append new pseudo-labels to existing array
-                self.pseudo_labels_array = np.vstack((self.pseudo_labels_array, pseudo_labels_array))
-            np.save(os.path.join(self.folder, f"pseudo-labels-seed{self.seed}.npy"), self.pseudo_labels_array)
-                
+                self.pseudo_labels_array = np.vstack(
+                    (self.pseudo_labels_array, pseudo_labels_array)
+                )
+            np.save(
+                os.path.join(self.folder, f"pseudo-labels-seed{self.seed}.npy"),
+                self.pseudo_labels_array,
+            )
+
         if trainer.epoch % self.save_step == 0:
-            trainer.save(folder=self.folder, file_name=f"best-checkpoint-seed{self.seed}.pth")
+            trainer.save(
+                folder=self.folder, file_name=f"best-checkpoint-seed{self.seed}.pth"
+            )
 
 
 # def get_clust(a, orig_dist=[], min_sim=None, ml_pairs=[], cl_pairs=[]):
@@ -925,7 +1037,9 @@ def get_model(model_name, eval=True, combined=False, drop_rate=0.2):
             model_name = "swin_large_patch4_window7_224"
         elif model_name == "hf-hub:BVRA/MegaDescriptor-T-224":
             model_name = "swin_tiny_patch4_window7_224"
-    megadescriptor_model = create_model(model_name, num_classes=0, pretrained=True, drop_rate=drop_rate)
+    megadescriptor_model = create_model(
+        model_name, num_classes=0, pretrained=True, drop_rate=drop_rate
+    )
     if eval:
         megadescriptor_model.eval()
     else:
@@ -942,7 +1056,9 @@ def load_checkpoint(megadescriptor_model, folder):
             return False
     else:
         return False
-    megadescriptor_model.load_state_dict(torch.load(os.path.join(folder, checkpoint_file), weights_only=False)["model"])
+    megadescriptor_model.load_state_dict(
+        torch.load(os.path.join(folder, checkpoint_file), weights_only=False)["model"]
+    )
     return True
 
 
@@ -964,7 +1080,13 @@ class ClusterLoss(nn.Module):
         with torch.no_grad():
             self.linear.weight = nn.Parameter(torch.Tensor(centroids))
             self.linear.weight.requires_grad_(False)
-            self.linear.bias = nn.Parameter(torch.zeros([num_clusters, ]))
+            self.linear.bias = nn.Parameter(
+                torch.zeros(
+                    [
+                        num_clusters,
+                    ]
+                )
+            )
             self.linear.bias.requires_grad_(False)
 
     def forward(self, features, pseudo_labels):
@@ -988,8 +1110,14 @@ class LinkPredictionLoss(nn.Module):
         self.metric = metric
 
     def forward(self, features, ml, cl):
-        pairwise_distances = metrics.pairwise.pairwise_distances(features, features, metric=self.metric)
-        return pairwise_distances[ml[:, 0], ml[:, 1]].mean() + 2 - pairwise_distances[cl[:, 0], cl[:, 1]].mean()
+        pairwise_distances = metrics.pairwise.pairwise_distances(
+            features, features, metric=self.metric
+        )
+        return (
+            pairwise_distances[ml[:, 0], ml[:, 1]].mean()
+            + 2
+            - pairwise_distances[cl[:, 0], cl[:, 1]].mean()
+        )
 
     def reset_weights(self, centroid, cluster_idx):
         self.linear.weight[cluster_idx].copy_(centroid)
@@ -1010,38 +1138,39 @@ def unfurl(list_of_dicts):
 
 class CustomTrainer(BasicTrainer):
     def __init__(
-            self,
+        self,
+        dataset,
+        model,
+        objective,
+        optimizer,
+        epochs,
+        scheduler=None,
+        device="cuda",
+        batch_size=128,
+        num_workers=1,
+        accumulation_steps=1,
+        epoch_callback=None,
+        ml_pairs=[],
+        cl_pairs=[],
+        eps=0.05,
+        min_samples=5,
+        metric="cosine",
+        # sampler=None,
+        # momentum=0.2,
+    ):
+        super().__init__(
             dataset,
             model,
             objective,
             optimizer,
             epochs,
-            scheduler=None,
-            device="cuda",
-            batch_size=128,
-            num_workers=1,
-            accumulation_steps=1,
-            epoch_callback=None,
-            ml_pairs=[],
-            cl_pairs=[],
-            eps=0.05,
-            min_samples=5,
-            metric="cosine",
-            # sampler=None,
-            # momentum=0.2,
-    ):
-        super().__init__(dataset,
-                         model,
-                         objective,
-                         optimizer,
-                         epochs,
-                         scheduler,
-                         device,
-                         batch_size,
-                         num_workers,
-                         accumulation_steps,
-                         epoch_callback,
-                         )
+            scheduler,
+            device,
+            batch_size,
+            num_workers,
+            accumulation_steps,
+            epoch_callback,
+        )
         self.ml_pairs = ml_pairs
         self.cl_pairs = cl_pairs
         self.eps = eps
@@ -1061,8 +1190,8 @@ class CustomTrainer(BasicTrainer):
         # self.pseudo_labels = np.full(len(self.dataset), -1, dtype=int)
         self.pseudo_labels = {}
         for idx, row in self.dataset.metadata.iterrows():
-            original_index = row['original_index']
-            identity = row['pseudo_identity']
+            original_index = row["original_index"]
+            identity = row["pseudo_identity"]
             self.pseudo_labels[original_index] = identity
 
         for e in range(self.epochs):
@@ -1072,7 +1201,7 @@ class CustomTrainer(BasicTrainer):
 
             if self.epoch_callback:
                 self.epoch_callback(trainer=self, epoch_data=epoch_data)
-        
+
         self.train_logs = unfurl(self.train_logs)
         return self.train_logs
 
@@ -1081,11 +1210,13 @@ class CustomTrainer(BasicTrainer):
             "train_loss_epoch_avg": 0,
             "train_acc": [],
             "epoch": self.epoch,
-            "pseudo_labels": self.pseudo_labels
+            "pseudo_labels": self.pseudo_labels,
         }
         model = self.model.train()
         losses = []
-        for i, batch in enumerate(tqdm(loader, desc=f"Epoch {self.epoch}: ", mininterval=1, ncols=100)):
+        for i, batch in enumerate(
+            tqdm(loader, desc=f"Epoch {self.epoch}: ", mininterval=1, ncols=100)
+        ):
             # x, y = batch
             idx, x, y = batch
             x, y = x.to(self.device), y.to(self.device)
@@ -1104,7 +1235,6 @@ class CustomTrainer(BasicTrainer):
 
             losses.append(loss.detach().cpu())
 
-            
             # # compute training accuracy
             # model.eval()
             # with torch.no_grad():
@@ -1113,15 +1243,18 @@ class CustomTrainer(BasicTrainer):
             #     pred = torch.argmax(out, dim=1)
             #     acc = (pred == y).float().mean()
             #     epoch_data["train_acc"].append(acc.item())
-            epoch_data["train_acc"].append([0.0])  # Placeholder for accuracy, as we are not computing it for now
+            epoch_data["train_acc"].append(
+                [0.0]
+            )  # Placeholder for accuracy, as we are not computing it for now
             model.train()
-
 
         if self.scheduler:
             self.scheduler.step()
 
         epoch_data["train_loss_epoch_avg"] = np.mean(losses).astype(float)
-        epoch_data["train_acc_epoch_avg"] = np.mean(epoch_data["train_acc"]).astype(float)
+        epoch_data["train_acc_epoch_avg"] = np.mean(epoch_data["train_acc"]).astype(
+            float
+        )
 
         # at the end of each epoch, update pseudo_labels using trained model
         self.model.eval()
@@ -1129,7 +1262,9 @@ class CustomTrainer(BasicTrainer):
             all_features = []
             all_labels = []
             all_indices = []
-            for batch in tqdm(loader, desc="Computing feats to update PLs: ", mininterval=1, ncols=100):
+            for batch in tqdm(
+                loader, desc="Computing feats to update PLs: ", mininterval=1, ncols=100
+            ):
                 idx, x, y = batch
                 all_indices.append(idx.cpu())
                 x = x.to(self.device)
@@ -1159,38 +1294,38 @@ class CustomTrainer(BasicTrainer):
             for idx, label in zip(all_indices, pseudo_labels):
                 pseudo_labels_mapped[idx] = label
             self.pseudo_labels = pseudo_labels_mapped
-            self.dataset.metadata['identity'] = self.pseudo_labels
+            self.dataset.metadata["identity"] = self.pseudo_labels
 
         return epoch_data
 
 
 class CustomWildlifeDataset(WildlifeDataset):
     def __init__(
-            self,
-            metadata,
-            root=None,
-            transform=None,
-            img_load="full",
-            col_path="path",
-            col_label="identity",
-            load_label=True,
+        self,
+        metadata,
+        root=None,
+        transform=None,
+        img_load="full",
+        col_path="path",
+        col_label="identity",
+        load_label=True,
     ):
-        super().__init__(metadata,
-                         root,
-                         transform,
-                         img_load,
-                         col_path,
-                         col_label,
-                         load_label,
-                         )
+        super().__init__(
+            metadata,
+            root,
+            transform,
+            img_load,
+            col_path,
+            col_label,
+            load_label,
+        )
 
     def __getitem__(self, idx):
         if self.load_label:
             img, label = super().__getitem__(idx)
-            return self.metadata.iloc[idx]['original_index'], img, label
+            return self.metadata.iloc[idx]["original_index"], img, label
         img = super().__getitem__(idx)
-        return self.metadata.iloc[idx]['original_index'], img
-
+        return self.metadata.iloc[idx]["original_index"], img
 
 
 def mean(x, idx=None):
@@ -1200,19 +1335,18 @@ def mean(x, idx=None):
         return np.mean([x[i] for i in idx])
 
 
-
 def compute_predictions(
-        features_query: np.ndarray,
-        features_database: np.ndarray,
-        ignore: Optional[List[List[int]]] = None,
-        matcher: Callable = CosineSimilarity,
-        k: int = 4,
-        return_score: bool = False
-        ):
+    features_query: np.ndarray,
+    features_database: np.ndarray,
+    ignore: Optional[List[List[int]]] = None,
+    matcher: Callable = CosineSimilarity,
+    k: int = 4,
+    return_score: bool = False,
+):
     """Computes a closest match in the database for each vector in the query set.
 
     Args:
-        features_query (np.ndarray): Query features of size n_query*n_feature. 
+        features_query (np.ndarray): Query features of size n_query*n_feature.
         features_database (np.ndarray): Database features of size n_database*n_feature
         ignore (Optional[List[List[int]]], optional): `ignore[i]` is a list of indices
             in the database ignores for i-th query.
@@ -1231,7 +1365,7 @@ def compute_predictions(
     # If ignore is not provided, initialize as empty
     if ignore is None:
         ignore = [[] for _ in range(n_query)]
-    
+
     idx_true = np.array(range(n_query))
     idx_pred = np.zeros((n_query, k), dtype=np.int32)
     scores = np.zeros((n_query, k))
@@ -1250,44 +1384,56 @@ def compute_predictions(
     else:
         return idx_true, idx_pred
 
-def compute_baks_baus(df, y_pred, new_individual='', col_label='identity', col_split='split'):
+
+def compute_baks_baus(
+    df, y_pred, new_individual="", col_label="identity", col_split="split"
+):
     baks = {}
     baus = {}
     y_true = df[col_label].to_numpy()
-    for dataset, df_dataset in df.groupby('dataset'):
-        identity_train = df_dataset[col_label][df_dataset[col_split] == 'train'].to_numpy()
-        identity_test = df_dataset[col_label][df_dataset[col_split] == 'test'].to_numpy()
-        identity_test_only = list(set(identity_test) - set(identity_train))                
-        idx = df.index.get_indexer(df_dataset.index[df_dataset[col_split] == 'test'])
+    for dataset, df_dataset in df.groupby("dataset"):
+        identity_train = df_dataset[col_label][
+            df_dataset[col_split] == "train"
+        ].to_numpy()
+        identity_test = df_dataset[col_label][
+            df_dataset[col_split] == "test"
+        ].to_numpy()
+        identity_test_only = list(set(identity_test) - set(identity_train))
+        idx = df.index.get_indexer(df_dataset.index[df_dataset[col_split] == "test"])
         baks[dataset] = metrics.BAKS(y_true[idx], y_pred[idx], identity_test_only)
-        baus[dataset] = metrics.BAUS(y_true[idx], y_pred[idx], identity_test_only, new_individual)
+        baus[dataset] = metrics.BAUS(
+            y_true[idx], y_pred[idx], identity_test_only, new_individual
+        )
     return baks, baus
 
 
-def predict(df, features, col_label='identity', col_split='split'):
+def predict(df, features, col_label="identity", col_split="split"):
     y_pred = np.full(len(df), np.nan, dtype=object)
     similarity_pred = np.full(len(df), np.nan, dtype=object)
-    for dataset_name in df['dataset'].unique():
-        idx_train = np.where((df['dataset'] == dataset_name) * (df[col_split] == 'train'))[0]
-        idx_test = np.where((df['dataset'] == dataset_name) * (df[col_split] == 'test'))[0]
+    for dataset_name in df["dataset"].unique():
+        idx_train = np.where(
+            (df["dataset"] == dataset_name) * (df[col_split] == "train")
+        )[0]
+        idx_test = np.where(
+            (df["dataset"] == dataset_name) * (df[col_split] == "test")
+        )[0]
 
-        idx_true, idx_pred, similarity = compute_predictions(features[idx_test], features[idx_train], return_similarity=True)
+        idx_true, idx_pred, similarity = compute_predictions(
+            features[idx_test], features[idx_train], return_similarity=True
+        )
         idx_true = idx_test[idx_true]
         idx_pred = idx_train[idx_pred]
 
-        y_pred[idx_true] = df[col_label].iloc[idx_pred[:,0]].values
-        similarity_pred[idx_true] = similarity[:,0]
+        y_pred[idx_true] = df[col_label].iloc[idx_pred[:, 0]].values
+        similarity_pred[idx_true] = similarity[:, 0]
     return y_pred, similarity_pred
 
 
-
-
-
 def unify_types(
-        y_true: List,
-        y_pred: List,
-        new_class: Optional[Union[int, str]] = None,
-    ) -> Tuple[List, List, Union[int, str]]:
+    y_true: List,
+    y_pred: List,
+    new_class: Optional[Union[int, str]] = None,
+) -> Tuple[List, List, Union[int, str]]:
     """Unifies label types.
 
     If `new_class` is string and labels integers (or the other way round),
@@ -1309,7 +1455,7 @@ def unify_types(
     is_integer = pd.api.types.is_integer_dtype(pd.Series(y_all))
     is_string = pd.api.types.is_string_dtype(pd.Series(y_all))
     if not is_integer and not is_string:
-        raise(Exception('Labels have mixed types. Convert all to int or str.'))
+        raise (Exception("Labels have mixed types. Convert all to int or str."))
     if is_string and isinstance(new_class, int):
         encoder = {new_class: new_class}
         for i, y in enumerate(y_all):
@@ -1326,14 +1472,11 @@ def unify_types(
     return y_true, y_pred, new_class
 
 
-
-
-
 def auc_roc_new_class(
-        y_true: List,
-        y_score: List,
-        new_class: Union[int, str],
-    ) -> float:
+    y_true: List,
+    y_score: List,
+    new_class: Union[int, str],
+) -> float:
     """Computes the area under ROC curve for detecting new individuals.
 
     High score suggests known individual.
@@ -1350,7 +1493,7 @@ def auc_roc_new_class(
         Computed arena under ROC curve.
     """
 
-    y_true, _, new_class = unify_types(y_true, [], new_class)   
+    y_true, _, new_class = unify_types(y_true, [], new_class)
     a = np.array(y_true) == new_class
     b = -np.array(y_score)
     return roc_auc_score(a, b)
@@ -1376,27 +1519,36 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
     }
     step = 0.01
     ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
-    new_individual = 'new_individual'
+    new_individual = "new_individual"
 
     # run on each dataset
     if dataset.subset != "WII":
         # also get micro-averaged results
-        default_closed_query_features = megadescriptor_extractor(dataset.default_closed_query)
+        default_closed_query_features = megadescriptor_extractor(
+            dataset.default_closed_query
+        )
         default_query_features = megadescriptor_extractor(dataset.default_query)
         default_gallery_features = megadescriptor_extractor(dataset.default_gallery)
 
         idx_train = dataset.default_gallery.metadata.index.values
         idx_test = dataset.default_query.metadata.index.values
-        similarity = dataset.matcher(query=default_closed_query_features, database=default_gallery_features)
-        cmc, all_AP, all_INP = evaluation.eval_wildlife(1 - similarity,
-                                                        dataset.default_closed_query.metadata.identity.values,
-                                                        dataset.default_gallery.metadata.identity.values, max_rank=10)
+        similarity = dataset.matcher(
+            query=default_closed_query_features, database=default_gallery_features
+        )
+        cmc, all_AP, all_INP = evaluation.eval_wildlife(
+            1 - similarity,
+            dataset.default_closed_query.metadata.identity.values,
+            dataset.default_gallery.metadata.identity.values,
+            max_rank=10,
+        )
         mAP = np.mean(all_AP)
         mINP = np.mean(all_INP)
         baks = {}
         baus = {}
 
-        idx_true, idx_pred, scores = compute_predictions(default_query_features, default_gallery_features, return_score=True)
+        idx_true, idx_pred, scores = compute_predictions(
+            default_query_features, default_gallery_features, return_score=True
+        )
         idx_true = idx_test[idx_true]
         idx_pred = idx_train[idx_pred]
         idx_pred = idx_pred[:, 0]
@@ -1404,15 +1556,25 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
         y_true = dataset.default_query.metadata["identity"].iloc[idx_true]
         y_true_w_new = np.array(
-            [y if y in dataset.default_gallery.metadata["identity"].values else new_individual for y in y_true])
+            [
+                (
+                    y
+                    if y in dataset.default_gallery.metadata["identity"].values
+                    else new_individual
+                )
+                for y in y_true
+            ]
+        )
         y_pred_closed = dataset.default_gallery.metadata["identity"].iloc[idx_pred]
-        identity_test_only = list(set(dataset.default_query.metadata['identity'].iloc[idx_test]) - set(
-            dataset.default_gallery.metadata['identity'].iloc[idx_train]))
+        identity_test_only = list(
+            set(dataset.default_query.metadata["identity"].iloc[idx_test])
+            - set(dataset.default_gallery.metadata["identity"].iloc[idx_train])
+        )
         for t in tqdm(ts):
             y_pred = copy.copy(y_pred_closed)
             # y_pred = y_pred.astype(str)
             # y_true = y_true.astype(str)
-            with np.errstate(invalid='ignore'):
+            with np.errstate(invalid="ignore"):
                 y_pred[scores < t] = new_individual
             baks[t] = BAKS(y_true, y_pred, identity_test_only)
             baus[t] = BAUS(y_true, y_pred, identity_test_only, new_individual)
@@ -1423,12 +1585,16 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         print("Top 10 accuracy:", (cmc[9] * 100))
         print("mAP:", mAP)
         print("mINP:", mINP)
-        print(f'BAKS = {np.mean(baks[-np.inf])}')
-        print(f'BAUS@0.7 = {np.mean(baus[0.7])}')
-        print(f'Normalized accuracy@0.7 = {np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7]))}')
-        print(f'ROC AUC score = {roc_score}')
+        print(f"BAKS = {np.mean(baks[-np.inf])}")
+        print(f"BAUS@0.7 = {np.mean(baus[0.7])}")
+        print(
+            f"Normalized accuracy@0.7 = {np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7]))}"
+        )
+        print(f"ROC AUC score = {roc_score}")
 
-        print(f"{dataset.subset},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}")
+        print(
+            f"{dataset.subset},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
+        )
 
         micro_results = {
             "Top-1 Accuracy": (cmc[0] * 100),
@@ -1443,21 +1609,27 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             "ROC AUC": roc_score,
         }
         os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, f'micro_metrics_{epoch+1}.json'), 'w') as fp:
+        with open(os.path.join(folder, f"micro_metrics_{epoch+1}.json"), "w") as fp:
             json.dump(micro_results, fp)
 
-        for dataset_name in dataset.csv['dataset'].unique():
+        for dataset_name in dataset.csv["dataset"].unique():
             # print("Extracting features for default closed query...")
             # filter dataset
-            filtered_closed_query = dataset.default_closed_query.metadata.query('dataset == @dataset_name')
+            filtered_closed_query = dataset.default_closed_query.metadata.query(
+                "dataset == @dataset_name"
+            )
             dataset_filtered_closed_query = WildlifeDataset(
                 metadata=filtered_closed_query,
                 root=dataset.image_root,
                 transform=dataset.test_transform,
             )
-            default_closed_query_features = megadescriptor_extractor(dataset_filtered_closed_query)
+            default_closed_query_features = megadescriptor_extractor(
+                dataset_filtered_closed_query
+            )
             # print("Extracting features for default query...")
-            filtered_query = dataset.default_query.metadata.query('dataset == @dataset_name')
+            filtered_query = dataset.default_query.metadata.query(
+                "dataset == @dataset_name"
+            )
             dataset_filtered_query = WildlifeDataset(
                 metadata=filtered_query,
                 root=dataset.image_root,
@@ -1465,21 +1637,30 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             )
             default_query_features = megadescriptor_extractor(dataset_filtered_query)
             # print("Extracting features for default gallery...")
-            filtered_gallery = dataset.default_gallery.metadata.query('dataset == @dataset_name')
+            filtered_gallery = dataset.default_gallery.metadata.query(
+                "dataset == @dataset_name"
+            )
             dataset_filtered_gallery = WildlifeDataset(
                 metadata=filtered_gallery,
                 root=dataset.image_root,
                 transform=dataset.test_transform,
             )
-            default_gallery_features = megadescriptor_extractor(dataset_filtered_gallery)
+            default_gallery_features = megadescriptor_extractor(
+                dataset_filtered_gallery
+            )
 
             idx_train = dataset_filtered_gallery.metadata.index.values
             idx_test = dataset_filtered_query.metadata.index.values
-            similarity = dataset.matcher(query=default_closed_query_features, database=default_gallery_features)
+            similarity = dataset.matcher(
+                query=default_closed_query_features, database=default_gallery_features
+            )
 
-            cmc, all_AP, all_INP = evaluation.eval_wildlife(1 - similarity,
-                                                            dataset_filtered_closed_query.metadata.identity.values,
-                                                            dataset_filtered_gallery.metadata.identity.values, max_rank=10)
+            cmc, all_AP, all_INP = evaluation.eval_wildlife(
+                1 - similarity,
+                dataset_filtered_closed_query.metadata.identity.values,
+                dataset_filtered_gallery.metadata.identity.values,
+                max_rank=10,
+            )
 
             mAP = np.mean(all_AP)
             mINP = np.mean(all_INP)
@@ -1487,7 +1668,9 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             baks = {}  # Balanced Accuracy on Known Samples
             baus = {}  # Balanced Accuracy on Unknown Samples
 
-            idx_true, idx_pred, scores = compute_predictions(default_query_features, default_gallery_features, return_score=True)
+            idx_true, idx_pred, scores = compute_predictions(
+                default_query_features, default_gallery_features, return_score=True
+            )
             idx_true = idx_test[idx_true]
             idx_pred = idx_train[idx_pred]
             idx_pred = idx_pred[:, 0]
@@ -1495,21 +1678,30 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
             y_true = dataset_filtered_query.metadata["identity"].iloc[idx_true]
             y_true_w_new = np.array(
-                [y if y in dataset_filtered_gallery.metadata["identity"].values else new_individual for y in y_true])
+                [
+                    (
+                        y
+                        if y in dataset_filtered_gallery.metadata["identity"].values
+                        else new_individual
+                    )
+                    for y in y_true
+                ]
+            )
             y_pred_closed = dataset_filtered_gallery.metadata["identity"].iloc[idx_pred]
 
-            identity_test_only = list(set(dataset_filtered_query.metadata['identity'].iloc[idx_test]) - set(
-                dataset_filtered_gallery.metadata['identity'].iloc[idx_train]))
+            identity_test_only = list(
+                set(dataset_filtered_query.metadata["identity"].iloc[idx_test])
+                - set(dataset_filtered_gallery.metadata["identity"].iloc[idx_train])
+            )
 
             for t in tqdm(ts):
                 y_pred = copy.copy(y_pred_closed)
-                with np.errstate(invalid='ignore'):
+                with np.errstate(invalid="ignore"):
                     y_pred[scores < t] = new_individual
                 baks[t] = BAKS(y_true, y_pred, identity_test_only)
                 baus[t] = BAUS(y_true, y_pred, identity_test_only, new_individual)
 
             roc_score = auc_roc_new_class(y_true_w_new, scores, new_individual)
-
 
             # print("Top 1 accuracy:", (cmc[0] * 100))
             # print("Top 3 accuracy:", (cmc[2] * 100))
@@ -1521,36 +1713,46 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             # print(f'BAUS@0.7 = {np.mean(baus[0.7])}')
             # print(f'Normalized accuracy@0.7 = {np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7]))}')
             # print(f'ROC AUC score = {roc_score}')
-            print(f"{dataset_name},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}")
+            print(
+                f"{dataset_name},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
+            )
 
             subset_results = {
-                    "Top-1 Accuracy": (cmc[0] * 100),
-                    "Top-3 Accuracy": (cmc[2] * 100),
-                    "Top-5 Accuracy": (cmc[4] * 100),
-                    "Top-10 Accuracy": (cmc[9] * 100),
-                    "mAP": mAP,
-                    "mINP": mINP,
-                    "BAKS": np.mean(baks[-np.inf]),
-                    "BAUS@0.7": np.mean(baus[0.7]),
-                    "Normalized Accuracy@0.7": np.sqrt(np.mean(baks[0.7]) * np.mean(baks[0.7])),
-                    "ROC AUC": roc_score,
-                }
-            
+                "Top-1 Accuracy": (cmc[0] * 100),
+                "Top-3 Accuracy": (cmc[2] * 100),
+                "Top-5 Accuracy": (cmc[4] * 100),
+                "Top-10 Accuracy": (cmc[9] * 100),
+                "mAP": mAP,
+                "mINP": mINP,
+                "BAKS": np.mean(baks[-np.inf]),
+                "BAUS@0.7": np.mean(baus[0.7]),
+                "Normalized Accuracy@0.7": np.sqrt(
+                    np.mean(baks[0.7]) * np.mean(baks[0.7])
+                ),
+                "ROC AUC": roc_score,
+            }
+
             for key, value in subset_results.items():
                 results[key].append(value)
 
-        print(f"mean,{np.mean(results['Top-1 Accuracy']):.2f},{np.mean(results['Top-3 Accuracy']):.2f},{np.mean(results['Top-5 Accuracy']):.2f},{np.mean(results['Top-10 Accuracy']):.2f},{np.mean(results['mAP']):.4f},{np.mean(results['mINP']):.4f},{np.mean(results['BAKS']):.4f},{np.mean(results['BAUS@0.7']):.4f},{np.sqrt(np.mean(results['BAKS']) * np.mean(results['BAUS@0.7'])):.4f},{np.mean(results['ROC AUC']):.4f}")
-        print(f"std,{np.std(results['Top-1 Accuracy']):.2f},{np.std(results['Top-3 Accuracy']):.2f},{np.std(results['Top-5 Accuracy']):.2f},{np.std(results['Top-10 Accuracy']):.2f},{np.std(results['mAP']):.4f},{np.std(results['mINP']):.4f},{np.std(results['BAKS']):.4f},{np.std(results['BAUS@0.7']):.4f},{np.sqrt(np.std(results['BAKS']) * np.std(results['BAUS@0.7'])):.4f},{np.std(results['ROC AUC']):.4f}")
-    
+        print(
+            f"mean,{np.mean(results['Top-1 Accuracy']):.2f},{np.mean(results['Top-3 Accuracy']):.2f},{np.mean(results['Top-5 Accuracy']):.2f},{np.mean(results['Top-10 Accuracy']):.2f},{np.mean(results['mAP']):.4f},{np.mean(results['mINP']):.4f},{np.mean(results['BAKS']):.4f},{np.mean(results['BAUS@0.7']):.4f},{np.sqrt(np.mean(results['BAKS']) * np.mean(results['BAUS@0.7'])):.4f},{np.mean(results['ROC AUC']):.4f}"
+        )
+        print(
+            f"std,{np.std(results['Top-1 Accuracy']):.2f},{np.std(results['Top-3 Accuracy']):.2f},{np.std(results['Top-5 Accuracy']):.2f},{np.std(results['Top-10 Accuracy']):.2f},{np.std(results['mAP']):.4f},{np.std(results['mINP']):.4f},{np.std(results['BAKS']):.4f},{np.std(results['BAUS@0.7']):.4f},{np.sqrt(np.std(results['BAKS']) * np.std(results['BAUS@0.7'])):.4f},{np.std(results['ROC AUC']):.4f}"
+        )
+
     else:
         step = 0.01
         ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
-        new_individual = 'new_individual'
+        new_individual = "new_individual"
         new_individual = -1
 
         print("Extracting features for default closed query...")
         # filter dataset
-        default_closed_query_features = megadescriptor_extractor(dataset.default_closed_query)
+        default_closed_query_features = megadescriptor_extractor(
+            dataset.default_closed_query
+        )
         print("Extracting features for default query...")
         default_query_features = megadescriptor_extractor(dataset.default_query)
         print("Extracting features for default gallery...")
@@ -1558,17 +1760,24 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
         idx_train = dataset.default_gallery.metadata.index.values
         idx_test = dataset.default_query.metadata.index.values
-        similarity = dataset.matcher(query=default_closed_query_features, database=default_gallery_features)
+        similarity = dataset.matcher(
+            query=default_closed_query_features, database=default_gallery_features
+        )
 
-        cmc, all_AP, all_INP = evaluation.eval_wildlife(1 - similarity,
-                                                        dataset.default_closed_query.metadata.identity.values,
-                                                        dataset.default_gallery.metadata.identity.values, max_rank=10)
+        cmc, all_AP, all_INP = evaluation.eval_wildlife(
+            1 - similarity,
+            dataset.default_closed_query.metadata.identity.values,
+            dataset.default_gallery.metadata.identity.values,
+            max_rank=10,
+        )
         mAP = np.mean(all_AP)
         mINP = np.mean(all_INP)
         baks = {}
         baus = {}
 
-        idx_true, idx_pred, scores = compute_predictions(default_query_features, default_gallery_features, return_score=True)
+        idx_true, idx_pred, scores = compute_predictions(
+            default_query_features, default_gallery_features, return_score=True
+        )
         idx_true = idx_test[idx_true]
         idx_pred = idx_train[idx_pred]
         idx_pred = idx_pred[:, 0]
@@ -1576,15 +1785,25 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
         y_true = dataset.default_query.metadata["identity"].iloc[idx_true]
         y_true_w_new = np.array(
-            [y if y in dataset.default_gallery.metadata["identity"].values else new_individual for y in y_true])
+            [
+                (
+                    y
+                    if y in dataset.default_gallery.metadata["identity"].values
+                    else new_individual
+                )
+                for y in y_true
+            ]
+        )
         y_pred_closed = dataset.default_gallery.metadata["identity"].iloc[idx_pred]
-        identity_test_only = list(set(dataset.default_query.metadata['identity'].iloc[idx_test]) - set(
-            dataset.default_gallery.metadata['identity'].iloc[idx_train]))
+        identity_test_only = list(
+            set(dataset.default_query.metadata["identity"].iloc[idx_test])
+            - set(dataset.default_gallery.metadata["identity"].iloc[idx_train])
+        )
         for t in tqdm(ts):
             y_pred = copy.copy(y_pred_closed)
             # y_pred = y_pred.astype(str)
             # y_true = y_true.astype(str)
-            with np.errstate(invalid='ignore'):
+            with np.errstate(invalid="ignore"):
                 y_pred[scores < t] = new_individual
             baks[t] = BAKS(y_true, y_pred, identity_test_only)
             baus[t] = BAUS(y_true, y_pred, identity_test_only, new_individual)
@@ -1595,12 +1814,16 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         print("Top 10 accuracy:", (cmc[9] * 100))
         print("mAP:", mAP)
         print("mINP:", mINP)
-        print(f'BAKS = {np.mean(baks[-np.inf])}')
-        print(f'BAUS@0.7 = {np.mean(baus[0.7])}')
-        print(f'Normalized accuracy@0.7 = {np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7]))}')
-        print(f'ROC AUC score = {roc_score}')
+        print(f"BAKS = {np.mean(baks[-np.inf])}")
+        print(f"BAUS@0.7 = {np.mean(baus[0.7])}")
+        print(
+            f"Normalized accuracy@0.7 = {np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7]))}"
+        )
+        print(f"ROC AUC score = {roc_score}")
 
-        print(f"{dataset.subset},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}")
+        print(
+            f"{dataset.subset},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
+        )
 
         results = {
             "Top-1 Accuracy": (cmc[0] * 100),
@@ -1617,9 +1840,7 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
         micro_results = results
 
-
     os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, f'evaluation_metrics_{epoch+1}.json'), 'w') as fp:
+    with open(os.path.join(folder, f"evaluation_metrics_{epoch+1}.json"), "w") as fp:
         json.dump(results, fp)
     return micro_results
-

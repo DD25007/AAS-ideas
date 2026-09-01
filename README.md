@@ -18,7 +18,9 @@ the paper's protocol. **Every row is the mean of 4 runs**, matching the paper's 
 protocol for its AL block.
 
 Run on 8x NVIDIA H200. **See `Todo.md`** for every version constraint, bug and
-optimisation found along the way — it is the companion to this file.
+optimisation found along the way — it is the companion to this file. The runs behind every
+number are frozen read-only in `outputs_initial/`; `aggregate_results.py` regenerates the
+tables below from them.
 
 ## Environment
 
@@ -32,6 +34,10 @@ conda env config vars set LD_LIBRARY_PATH=$CONDA_PREFIX/lib -n alm
 ```
 
 Both `env config vars` lines are required, not optional — see `Todo.md` items 8 and 9.
+`alm` is preserved untouched as the environment these numbers were produced in. Ongoing work
+uses `hitl`, a clone of it (`conda create --clone alm -n hitl`), so the published results stay
+re-runnable exactly as they were. The launchers in `scripts/` export `LD_LIBRARY_PATH`
+themselves, since they invoke the interpreter directly rather than activating the env.
 `finch-clust==0.2.1` is a hard pin: 0.2.2+ changes a signature the AAS sampler calls
 positionally, and the failure is silent (the run parks at a `pdb` prompt). Item 1.
 
@@ -84,14 +90,14 @@ standard deviation across those splits.
 | Foundation row (ImageNet Swin-L) | 4 | **44.46** ±0.34 | 25.54 | 57.95 | 64.74 | 56.62 | 76.04 | 45.65 | **−1.19** |
 | Skyline, 30 ep, zerobased | 4 | 65.86 ±0.20 | 49.33 | 75.33 | 74.66 | 75.38 | 89.73 | 64.29 | +1.57 |
 | Skyline, 30 ep, offset | 4 | 65.90 ±0.45 | 49.14 | 75.38 | 75.16 | 75.68 | 89.88 | 64.29 | +1.61 |
-| Skyline, 50 ep, zerobased | 4 | 68.56 ±0.19 | 52.40 | 77.84 | 76.60 | 77.88 | 90.45 | 64.29 | +4.27 |
+| Skyline, 50 ep, zerobased | 4 | 68.55 ±0.19 | 52.40 | 77.84 | 76.61 | 77.88 | 90.45 | 64.29 | +4.26 |
 | Skyline, 50 ep, offset | 4 | 68.39 ±0.51 | 52.33 | 77.66 | 76.85 | 77.82 | 90.49 | 64.29 | +4.10 |
 
 Not a Table 1 row, but measured for comparison:
 
 | Model | n | mAP | mINP | BAKS | AUC ROC | Top-1 | Top-5 |
 |---|---|---|---|---|---|---|---|
-| MegaDescriptor-L-224, real weights | 4 | 53.34 ±0.16 | 32.86 | 67.90 | 68.30 | 67.77 | 85.91 |
+| MegaDescriptor-L-224, real weights | 4 | 53.34 ±0.16 | 32.86 | 67.90 | 68.30 | 67.78 | 85.91 |
 
 **ResNet-50 Baseline: −0.65 mAP.** This is the load-bearing result — it uses no training at
 all, so it isolates the ≈1-point deficit on the trained rows to training numerics rather
@@ -101,7 +107,7 @@ this row shares and reproduces.
 ### Skyline: the label mode is irrelevant, the epoch budget is not
 
 With 4 seeds the two label modes are **indistinguishable**: 65.86 ±0.20 vs 65.90 ±0.45 at
-30 epochs (0.04 apart), and 68.56 ±0.19 vs 68.39 ±0.51 at 50 epochs (0.17 apart). Both
+30 epochs (0.04 apart), and 68.55 ±0.19 vs 68.39 ±0.51 at 50 epochs (0.16 apart). Both
 gaps are well inside one standard deviation.
 
 That settles the off-by-one (`Todo.md` 13b): once `num_classes` is made consistent with the
@@ -166,35 +172,43 @@ are firmly inside the noise.
 ## Commands actually used
 
 The commands at the top of this README do **not** reproduce Table 1's AL rows. Those come
-from the SpCL entry point, with a ResNet-50 backbone and SpCL's training configuration, as
-the paper's implementation details specify:
+from `train_al.py`, with a ResNet-50 backbone and SpCL's training configuration, as the
+paper's implementation details specify.
+
+Use the launchers in [`scripts/`](scripts/) — they carry the GPU/VRAM gating, the BLAS
+thread caps and the `LD_LIBRARY_PATH` that conda's faiss needs, none of which are optional:
+
+```bash
+bash scripts/queue.sh al  outputs_new     # all 24 AL runs,  1 job/GPU, auto-retry
+bash scripts/queue.sh row outputs_new     # all 24 baseline / foundation / skyline runs
+```
+
+Single runs, if you want the underlying commands:
 
 ```bash
 # AL rows (SpCL base + Random / GBAS / LBAS / NIS(CC) / AAS(ConSam)); omit -s for SpCL base
-cd SpCL
-PYTHONPATH=$REPO/SpCL:$REPO CUDA_VISIBLE_DEVICES=0 \
-OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
-python -u examples/al_spcl_train_usl.py \
-  -d wildlife --subset combined -s ConSam --seed 1 \
-  --data-dir <dir containing wildlife/wildlifereid-10k> --logs-dir <out> -j 6
+bash scripts/run_grid.sh ConSam 1 0 outputs_new
+#   -> python -u train_al.py -d wildlife --subset combined -s ConSam --seed 1 \
+#             --data-dir $REPO/dataroot --logs-dir <out> -j 6
+
+# baseline / foundation / skyline rows
+bash scripts/run_row.sh resnet50_baseline 0 0 outputs_new
+#   -> python -u main.py --dataset combined --dataset_path <dir> --out_dir <out> \
+#             --baseline --model_name resnet50 --seed 1 --sample_seed 0 \
+#             --images_per_id 5 --metric precomputed
 ```
 
 Defaults already match the paper: `--epochs 50 --eval-step 10` (5 AL cycles),
 `--consam_eps 0.6 --consam_k 5 --consam_sim_thresh 0.3` = (ε, k_max, s_min) = (0.6, 5, 0.3),
-and the 0.02%-per-cycle budget hardcoded in `SpCL/sampling/base.py`.
+and the 0.02%-per-cycle budget hardcoded in `spcl/sampling/base.py`.
 
-**Run it from the `SpCL/` directory.** `sampling/` exists both at the repo root and under
-`SpCL/`, and the classes are not interchangeable — running from the repo root silently
-picks the wrong package and every sampler dies with
-`TypeError: ... got an unexpected keyword argument 'args'`. USL runs are unaffected, so a
-whole grid can look healthy while every AL row is dead (`Todo.md` item 12).
+Runs go to `<root>/{al,table1}/<row>/s<seed>/`, matching the frozen baseline, so
 
 ```bash
-# baseline / foundation / skyline rows
-python main.py --dataset combined --dataset_path <dir> --out_dir <out> \
-  --baseline --model_name resnet50 \
-  --images_per_id 5 --metric precomputed --sample_seed 0
+python aggregate_results.py --compare outputs_initial outputs_new
 ```
+
+rebuilds both tables above from the JSONs and reports any cell that moved.
 
 For the foundation row, pass MegaDescriptor's name and **let `get_model` substitute
 ImageNet Swin-L** — that substitution is what the published number went through:
@@ -234,8 +248,8 @@ them. Full reasoning in `Todo.md`.
 | File | change | why |
 |---|---|---|
 | `requirements.txt` | pin `finch-clust==0.2.1` | 0.2.2+ silently breaks AAS (item 1) |
-| `SpCL/examples/al_spcl_train_usl.py` | `model.to('cuda:0')` after eval; re-comment `sampling.assc` import | wildlife-tools leaves the model on CPU (item 11); `assc.py` does not exist under `SpCL/sampling/` (item 12) |
-| `SpCL/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat` | corrupts the NIS estimate (W1) |
+| `train_al.py` | `model.to('cuda:0')` after eval; samplers imported from `spcl.sampling` | wildlife-tools leaves the model on CPU (item 11); the old `sampling` shadowing is now structurally impossible (item 12) |
+| `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat` | corrupts the NIS estimate (W1) |
 | `main.py` | skyline label mode + `extra_classes`; `get_evaluation_results` epoch arg; `run_suffix` entries for ImageNet Swin | items 13a/13b, 16 |
 | `utils.py` | `update_pseudo_labels` flag on `CustomTrainer` | stops per-epoch re-clustering destroying skyline labels (item 13c) |
 
@@ -246,12 +260,14 @@ now in a state that reproduces Table 1 as published.
 ## Output layout
 
 ```
-outputs/combined_<sampler>_s<seed>/      AL grid, 24 runs (6 methods x 4 seeds)
-  wildlife/combined/evaluation/evaluation_metrics_52.json   <- 13 per-dataset values
-  logs_al/combined/results.csv                              <- per-cycle micro mAP
-outputs_table1/<row>/                    baseline / foundation / skyline, seed 0
-outputs_table1_seeds/<row>_s<seed>/      the same rows, seeds 1-3
-outputs_swintest/{swin,mega}_s<seed>/    ImageNet Swin-L vs real MegaDescriptor
+outputs_initial/                         frozen, read-only; see its own README.md
+  al/<sampler>/s<seed>/                  AL grid, 24 runs (6 methods x 4 seeds)
+    wildlife/combined/evaluation/evaluation_metrics_52.json  <- 13 per-dataset values
+    logs_al/combined/results.csv                             <- per-cycle micro mAP
+  table1/<row>/s<seed>/                  baseline / foundation / skyline, seeds 0-3
+    pretrained_models/**/evaluation_metrics_0.json
+    <row> = resnet50_baseline | swin_foundation | megadescriptor
+          | resnet50_skyline_e{30,50}_{zerobased,offset}
 ```
 
 `evaluation_metrics_52.json` is the final best-checkpoint eval and holds 13-element lists,

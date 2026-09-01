@@ -1,4 +1,4 @@
-from sampling.base import BaseSampling
+from .base import BaseSampling
 from itertools import combinations
 import random
 import numpy as np

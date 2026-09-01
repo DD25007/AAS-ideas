@@ -19,7 +19,10 @@ vehiclex/
 logs/
 *.egg-info
 vis_log/
-wildlifereid-10k
+# machine-specific dataset links (absolute paths, never committed)
+dataroot/
 
 CHANGES_MADE.md
 .vscode/
+# launcher queue state
+scripts/.state/

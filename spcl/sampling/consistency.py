@@ -1,4 +1,4 @@
-from sampling.base import BaseSampling
+from .base import BaseSampling
 import numpy as np
 from spcl.utils.constrained_clustering import constrained_clustering
 from sklearn import metrics

@@ -1,22 +1,10 @@
 from __future__ import absolute_import
 import warnings
 
-from .market1501 import Market1501
-from .msmt17 import MSMT17
-from .personx import PersonX
-from .veri import VeRi
-from .vehicleid import VehicleID
-from .vehiclex import VehicleX
 from .wildlife import Wildlife
 
 
 __factory = {
-    'market1501': Market1501,
-    'msmt17': MSMT17,
-    'personx': PersonX,
-    'veri': VeRi,
-    'vehicleid': VehicleID,
-    'vehiclex': VehicleX,
     'wildlife': Wildlife,
 }
 

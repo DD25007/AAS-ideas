@@ -1,4 +1,4 @@
-from sampling.base import BaseSampling
+from .base import BaseSampling
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
 import math

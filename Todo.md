@@ -10,6 +10,20 @@ torch 2.5.1+cu124, numpy 1.26.4, scipy 1.13.1, faiss-gpu 1.12.0 from conda).
 Status legend: **BLOCKING** = code breaks without the pin. **LATENT** = works today,
 breaks on upgrade. **ENV** = environment/packaging, no code change needed.
 
+> **Paths changed on 2026-09-01.** The vendored `SpCL/` tree was absorbed into the repo and
+> deleted (section R3 at the end of this file). Findings recorded below still cite the old
+> paths, deliberately — they are the record of what was found where. Translate with:
+>
+> | cited as | now |
+> |---|---|
+> | `SpCL/spcl/…` | `spcl/…` |
+> | `SpCL/sampling/…` | `spcl/sampling/…` |
+> | `SpCL/examples/al_spcl_train_usl.py` | `train_al.py` |
+> | `SpCL/spcl/utils/faiss_utils.py` | gone — use the repo-root `faiss_utils.py` |
+> | `outputs*/…` | `outputs_initial/{al,table1}/<row>/s<seed>/` |
+>
+> The environment is now `hitl` (a clone of `alm`); `alm` is preserved untouched.
+
 ---
 
 ## 1. finch-clust — pinned `==0.2.1` — BLOCKING
@@ -1014,3 +1028,126 @@ training numerics (torch/cuDNN/faiss versions) rather than data, protocol or met
 4. Give the skyline a real trainer path (item 13c) instead of the re-clustering workaround.
 5. Investigate the NIS residual (item 17).
 6. Port the 5 USL baselines using the RTMem recipe above — the largest missing block.
+
+---
+
+# Repo restructure, 2026-09-01
+
+Done before starting the optimisation work, so that "the metrics still match" is a
+falsifiable claim rather than a hope. Three tasks: freeze the reproduction, absorb the
+vendored `SpCL/` tree, and move to a fresh conda env.
+
+## R1. The reproduction is frozen in `outputs_initial/`, read-only
+
+23 GB of run outputs sat in four sibling directories that new runs would have written
+straight back into. They are now one read-only tree with its own provenance README,
+`MANIFEST.sha256` (483 metric artifacts), and `CHECKPOINTS.txt` (192 checkpoints, 18.2 GB).
+
+Regrouped so every seed of a row lives under one parent — `al/<sampler>/s<seed>/` and
+`table1/<row>/s<seed>/` — replacing the old split where seed 0 lived in `outputs_table1/`,
+seeds 1–3 in `outputs_table1_seeds/`, and the two foundation-row model families in
+`outputs_swintest/`. `scripts/` writes the identical layout, so comparison is a tree walk.
+
+**Pruned 4.36 GB.** All 19 `.failed*` AL attempts were GPU-memory casualties — 6 × faiss
+`StandardGpuResourcesImpl::allocMemory`, 3 × `torch.OutOfMemoryError`, 2 × the faiss
+`blasStatus == CUBLAS_STATUS_SUCCESS` assertion, the rest killed mid-epoch — and every one
+has a completed counterpart that reached `Total running time`. Their checkpoints and partial
+metrics were superseded; `train.log` + `log.txt` are kept (7.7 MB) as the evidence trail,
+with per-attempt causes in `al/_failed_logs/WHY.txt` and the full deletion inventory in
+`REMOVED.txt`. `_debug_skyline` got the same treatment: no metrics, 329 MB of weights, log kept.
+
+## R2. `aggregate_results.py` — the README tables are now generated
+
+The published tables were assembled by hand, so nothing could check them. The new script
+rebuilds them from the JSONs (macro-mean over 13 datasets, then over seeds) and diffs two
+output trees:
+
+```bash
+python aggregate_results.py outputs_initial
+python aggregate_results.py --compare outputs_initial outputs_verify --tol 0.0
+```
+
+It reproduced every published figure except three cells that were off by 0.01 from
+last-digit rounding in the hand-assembled table — **README corrected**: skyline 50 ep
+zerobased mAP 68.56→68.55 (68.5527) and AUC ROC 76.60→76.61 (76.6073), MegaDescriptor Top-1
+67.77→67.78 (67.7751). The Δ mAP for that skyline row moves +4.27→+4.26.
+
+## R3. `SpCL/` absorbed into the tree and deleted — closes item 12 and C2
+
+`SpCL/spcl/` → `spcl/`, `SpCL/sampling/` → **`spcl/sampling/`**, and
+`SpCL/examples/al_spcl_train_usl.py` → `train_al.py`. Licence preserved at
+`third_party/SpCL-LICENSE` with provenance in `third_party/NOTICE.md`; the authors' prior
+results moved to `reference/spcl_logs_al{,_100}/`.
+
+Deleted as unreachable from the AL entry point: the 6 unused datasets, `models/dsbn.py`, the
+`resnet_ibn` backbones, the three unused examples, `setup.py`/`setup.cfg`, and the upstream
+README/figures.
+
+- **Item 12 is closed structurally.** There is no second importable `sampling` package, so
+  the failure where running from the repo root silently binds the wrong samplers and every AL
+  row dies with `TypeError: ... unexpected keyword argument 'args'` can no longer happen. The
+  `cd SpCL` + `PYTHONPATH` requirement is gone; runs start from the repo root.
+- **C2 is closed.** `spcl/utils/faiss_utils.py` was byte-identical to the repo-root copy and
+  was deleted in favour of it.
+- `train_al.py`'s `-d` default was `market1501`, whose module is now gone; changed to
+  `wildlife`. Every invocation already passed `-d wildlife` explicitly.
+
+**Verified as a pure move:** of 42 relocated files, 34 are byte-identical to `HEAD` and the
+8 modified ones contain *only* the import/factory edits listed above. No numerics touched.
+
+## R4. Environment: `hitl`, cloned from `alm`
+
+`conda create --clone alm -n hitl`, plus the two `env config vars`. `alm` is untouched so the
+published numbers stay re-runnable in the exact environment that produced them. Cloning
+rather than reinstalling holds the package set constant, so the refactor is the only variable
+in the parity check. Library modernization (items 1–10) gets its own env later.
+
+---
+
+## R5. `LD_LIBRARY_PATH` was never in the launchers — NEW, FIXED
+
+A latent instance of item 8. The launch scripts invoke the interpreter directly
+(`/storage/.../bin/python`) rather than activating the env, so the `conda env config vars`
+carrying `LD_LIBRARY_PATH` **never applied**. Every run all week depended on the value being
+inherited from some shell where the env had been activated at some point.
+
+Reproduced on both envs, so it is not a clone artifact:
+
+```
+$ .../alm/bin/python  -c "import faiss"                 # OK
+$ .../alm/bin/python  -c "import pandas; import faiss"  # ImportError: CXXABI_1.3.15 not found
+$ LD_LIBRARY_PATH=.../alm/lib .../alm/bin/python -c "import pandas; import faiss"   # OK
+```
+
+Import order is what hides it: pandas/torch pull in the older system `libstdc++` first, and
+conda's `libfaiss.so` then cannot find `CXXABI_1.3.15`. A bare `import faiss` succeeds, so
+the fault never shows up in a quick test.
+
+`scripts/common.sh` now derives `LD_LIBRARY_PATH` and `PYTHONNOUSERSITE` from `$PYTHON`, so
+a run is self-contained regardless of the calling shell.
+
+## R6. `cudnn.deterministic` is overridden by `cudnn.benchmark` — NEW, NOT FIXED
+
+`train_al.py:121-133` sets
+
+```python
+random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
+cudnn.deterministic = True
+...
+cudnn.benchmark = True      # <- 9 lines later, defeats the above
+```
+
+`benchmark = True` re-enables nondeterministic cuDNN algorithm selection, and
+`torch.cuda.manual_seed_all` is never called at all (`set_seed` in `spcl/utils/wildlife_utils.py`
+does call it, but the AL entry point does not use it). So **a trained AL run is not
+bit-reproducible even against itself**, and no refactor can be validated by re-running one
+and diffing.
+
+Consequences:
+
+- The parity gate for any future change has to be the *eval-only* rows, which are pure
+  inference and do reproduce exactly, plus a byte-diff of the training code. Re-running an
+  AL row can only ever confirm "within seed noise" (measured std 0.30–0.70 mAP).
+- Worth fixing on its own merits: drop `benchmark = True`, add `torch.cuda.manual_seed_all`,
+  and seed the DataLoader workers. Expect a throughput cost from losing cuDNN autotuning,
+  which is presumably why it was set.

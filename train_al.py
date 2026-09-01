@@ -32,18 +32,14 @@ from spcl.utils.logging import Logger
 from spcl.utils.serialization import load_checkpoint, save_checkpoint, copy_state_dict
 from spcl.utils.faiss_rerank import compute_jaccard_distance
 
-from sampling.random import RandomSampling, RobustRandomSampling
-# FIXME(cleanup): re-commented. `sampling` here resolves to SpCL/sampling/, which has
-# no assc.py or fps.py -- those live only in the repo-root sampling/ package. Leaving
-# this import active raises ModuleNotFoundError: No module named 'sampling.assc'.
-# The MinMax/EC samplers dispatched at ~line 150 are unreachable as a result; they are
-# not paper baselines. Proper fix is to merge the two `sampling` packages, or import
-# these explicitly from the repo-root one. See Todo.md item C4.
-# from sampling.assc import MinMax, ExploreConsolidate
-# from sampling.fps import FPS
-from sampling.balanced import LBAS, GBAS
-from sampling.consistency import ConsistencySampling
-from sampling.counting_clusters import CountingClusters
+from spcl.sampling.random import RandomSampling, RobustRandomSampling
+# NOTE: the AL samplers now live in spcl.sampling, renamed from the former SpCL/sampling/
+# so they can no longer be shadowed by the repo-root `sampling` package (Todo.md item 12).
+# The MinMax/ExploreConsolidate/FPS samplers dispatched below exist only in the root
+# `sampling` package, take different constructor signatures, and are not paper baselines.
+from spcl.sampling.balanced import LBAS, GBAS
+from spcl.sampling.consistency import ConsistencySampling
+from spcl.sampling.counting_clusters import CountingClusters
 
 from spcl.datasets.wildlife import WildlifeDatasets
 from spcl.utils.wildlife_utils import get_evaluation_results
@@ -494,7 +490,7 @@ def main_worker(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Self-paced contrastive learning on unsupervised re-ID")
     # data
-    parser.add_argument('-d', '--dataset', type=str, default='market1501',
+    parser.add_argument('-d', '--dataset', type=str, default='wildlife',
                         choices=datasets.names())
     parser.add_argument('-b', '--batch-size', type=int, default=64)
     parser.add_argument('-j', '--workers', type=int, default=4)

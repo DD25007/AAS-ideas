@@ -1,0 +1,33 @@
+# conda create -n alm python=3.10 -y && conda activate alm
+# conda install -n alm -c pytorch faiss-gpu -y
+# pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+# pip install -r requirements.txt
+#
+# conda env config vars set PYTHONNOUSERSITE=1 -n alm
+# conda env config vars set LD_LIBRARY_PATH=$CONDA_PREFIX/lib -n alm
+
+timm>=0.9.2
+transformers>=4.30.2
+
+numpy>=1.24,<2
+scipy>=1.10,<1.14
+pandas>=1.1.4,<3
+scikit-learn>=1.0.1,<1.6
+
+finch-clust==0.2.1  # 0.2.2+ changed clust_rank signature/return; breaks SpCL/spcl/utils/constrained_clustering.py FINCH wrapper
+active-semi-supervised-clustering
+metric-learn>=0.4
+
+wildlife-tools @ git+https://github.com/WildlifeDatasets/wildlife-tools.git
+wildlife-datasets>=1.0.7
+
+Pillow>=7.1.2
+opencv-python>=4.5.5.62
+
+matplotlib>=3.5.1
+seaborn>=0.12
+networkx>=3.0
+
+tqdm>=4.62.3
+wandb
+setuptools

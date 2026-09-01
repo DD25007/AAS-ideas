@@ -5,14 +5,11 @@ from torchvision import transforms as T
 
 from wildlife_tools.data import WildlifeDataset
 from wildlife_tools.similarity import CosineSimilarity
-from wildlife_tools.inference import KnnClassifier, TopkClassifier
-from wildlife_tools.features import DeepFeatures, ClipFeatures
-from wildlife_datasets import analysis, datasets, splits
+from wildlife_tools.features import DeepFeatures
 from scipy.spatial import distance
 
 
-import evaluation
-from utils import get_model, set_seed, compute_jaccard_distance
+from utils import get_model, set_seed
 
 
 class WildlifeDatasets:
@@ -23,69 +20,107 @@ class WildlifeDatasets:
         dataset_path,
         dataset_split_seed=0,
         images_per_id=1,
-        metric='cosine',  # 'euclidean', 'precomputed', 'cosine'
+        metric="cosine",  # 'euclidean', 'precomputed', 'cosine'
     ):
         self.dataset = dataset
         self.metric = metric
         self.dataset_split_seed = dataset_split_seed
         self.images_per_id = images_per_id
-        self.train_transform = T.Compose([
-            T.Resize(size=(224, 224)),
-            T.RandomRotation(180),
-            T.RandomHorizontalFlip(),
-            T.RandomVerticalFlip(),
-            T.ToTensor(),
-            T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-        ])
-        self.test_transform = T.Compose([
-            T.Resize(size=(224, 224)),
-            T.ToTensor(),
-            T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-        ])
+        self.train_transform = T.Compose(
+            [
+                T.Resize(size=(224, 224)),
+                T.RandomRotation(180),
+                T.RandomHorizontalFlip(),
+                T.RandomVerticalFlip(),
+                T.ToTensor(),
+                T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ]
+        )
+        self.test_transform = T.Compose(
+            [
+                T.Resize(size=(224, 224)),
+                T.ToTensor(),
+                T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ]
+        )
         self.matcher = CosineSimilarity()
         set_seed(self.dataset_split_seed)
 
         if dataset == "WII":
-            dataset_path = '/mnt/nas/users/jeetm/p_project_01/cnnarch/WII_dataset_densenet121_usam/data'
-            self.image_root = os.path.join(dataset_path, 'cropped_images')
-            self.train_split = pd.read_csv(os.path.join(dataset_path, 'annotations', 'train.csv')).rename(columns={'Entity': 'identity', 'Image_Name': 'path'})
-            self.test_split = pd.read_csv(os.path.join(dataset_path, 'annotations', 'test.csv')).rename(columns={'Entity': 'identity', 'Image_Name': 'path'})
+            dataset_path = "/mnt/nas/users/jeetm/p_project_01/cnnarch/WII_dataset_densenet121_usam/data"
+            self.image_root = os.path.join(dataset_path, "cropped_images")
+            self.train_split = pd.read_csv(
+                os.path.join(dataset_path, "annotations", "train.csv")
+            ).rename(columns={"Entity": "identity", "Image_Name": "path"})
+            self.test_split = pd.read_csv(
+                os.path.join(dataset_path, "annotations", "test.csv")
+            ).rename(columns={"Entity": "identity", "Image_Name": "path"})
             self.csv = self.train_split.copy()
         else:
-            self.csv = pd.read_csv(os.path.join(dataset_path, 'wildlifereid-10k', 'metadata.csv'))
+            self.csv = pd.read_csv(
+                os.path.join(dataset_path, "wildlifereid-10k", "metadata.csv")
+            )
             if dataset != "combined":
                 self.csv = self.csv.query(f'dataset == "{dataset}"')
             else:
-                self.csv = self.csv.query('dataset in ["AmvrakikosTurtles", "CatIndividualImages", "Chicks4FreeID", "CowDataset", "DogFaceNet", "MPDD", "MultiCamCows2024", "PolarBearVidID", "PrimFace", "ReunionTurtles", "SeaStarReID2023", "SouthernProvinceTurtles", "ZakynthosTurtles"]')
-            self.image_root = os.path.join(dataset_path, 'wildlifereid-10k')
+                self.csv = self.csv.query(
+                    'dataset in ["AmvrakikosTurtles", "CatIndividualImages", "Chicks4FreeID", "CowDataset", "DogFaceNet", "MPDD", "MultiCamCows2024", "PolarBearVidID", "PrimFace", "ReunionTurtles", "SeaStarReID2023", "SouthernProvinceTurtles", "ZakynthosTurtles"]'
+                )
+            self.image_root = os.path.join(dataset_path, "wildlifereid-10k")
             self.train_split = self.csv.query('split == "train"')
             self.test_split = self.csv.query('split == "test"')
 
-        identity_train = np.unique(self.train_split['identity'].to_numpy())  # set of identities in the train set
-        identity_test = np.unique(self.test_split['identity'].to_numpy())  # set of identities in the test set
+        identity_train = np.unique(
+            self.train_split["identity"].to_numpy()
+        )  # set of identities in the train set
+        identity_test = np.unique(
+            self.test_split["identity"].to_numpy()
+        )  # set of identities in the test set
 
         # Split the set of identities in the train set into known (labeled) and unknown (unlabeled) sets
         if dataset != "WII":
-            self.identity_train_labeled, self.identity_train_unlabeled = self.split_train_into_gallery_and_unknown(identity_train)
+            self.identity_train_labeled, self.identity_train_unlabeled = (
+                self.split_train_into_gallery_and_unknown(identity_train)
+            )
             print(f"Number of identities in the train set: {len(identity_train)}")
-            print(f"Number of known identities in the train set: {len(self.identity_train_labeled)}")
-            print(f"Number of unknown identities in the train set: {len(self.identity_train_unlabeled)}")
+            print(
+                f"Number of known identities in the train set: {len(self.identity_train_labeled)}"
+            )
+            print(
+                f"Number of unknown identities in the train set: {len(self.identity_train_unlabeled)}"
+            )
             print(f"Number of identities in the test set: {len(identity_test)}")
 
-            identity_test_only = list(set(identity_test) - set(identity_train))  # Unseen IDs w.r.t. the gallery
-            identity_test_closed = list(set(identity_test).intersection(set(self.identity_train_labeled)))  # IDs observed in the gallery
-            print(f"Number of unknown identities only in the test set: {len(identity_test_only)}")
-            print(f"Number of known identities in the test set: {len(identity_test_closed)}")
+            identity_test_only = list(
+                set(identity_test) - set(identity_train)
+            )  # Unseen IDs w.r.t. the gallery
+            identity_test_closed = list(
+                set(identity_test).intersection(set(self.identity_train_labeled))
+            )  # IDs observed in the gallery
+            print(
+                f"Number of unknown identities only in the test set: {len(identity_test_only)}"
+            )
+            print(
+                f"Number of known identities in the test set: {len(identity_test_closed)}"
+            )
 
-            test_identity_mask = self.test_split['identity'].isin(identity_test_closed)
+            test_identity_mask = self.test_split["identity"].isin(identity_test_closed)
             self.test_split_closed = self.test_split[test_identity_mask]
         else:
-            self.identity_test_closed, self.identity_test_open = self.split_train_into_gallery_and_unknown(identity_test)
+            self.identity_test_closed, self.identity_test_open = (
+                self.split_train_into_gallery_and_unknown(identity_test)
+            )
             print(f"Number of identities in the test set: {len(identity_test)}")
-            print(f"Number of closed identities (in both gallery and query sets): {len(self.identity_test_closed)}")
-            print(f"Number of open identities (only in query set): {len(self.identity_test_open)}")
+            print(
+                f"Number of closed identities (in both gallery and query sets): {len(self.identity_test_closed)}"
+            )
+            print(
+                f"Number of open identities (only in query set): {len(self.identity_test_open)}"
+            )
 
-            test_identity_mask = self.test_split['identity'].isin(self.identity_test_closed)
+            test_identity_mask = self.test_split["identity"].isin(
+                self.identity_test_closed
+            )
             self.test_split_closed = self.test_split[test_identity_mask]
 
         self.default_train = WildlifeDataset(
@@ -119,20 +154,24 @@ class WildlifeDatasets:
         set_seed(self.dataset_split_seed)
         return identities[:num_labeled], identities[num_labeled:]
 
-    def get_representative_gallery_from_train(self, model, device="cuda", num_workers=8, batch_size=32):
+    def get_representative_gallery_from_train(
+        self, model, device="cuda", num_workers=8, batch_size=32
+    ):
         # Split the training set into labeled and unlabeled sets.
         # The labeled set is used as the representative gallery set for re-identification
         representative_gallery = []
         K = self.images_per_id
 
-        feature_extractor = DeepFeatures(model, device=device, num_workers=num_workers, batch_size=batch_size)
+        feature_extractor = DeepFeatures(
+            model, device=device, num_workers=num_workers, batch_size=batch_size
+        )
         train_features = np.array(feature_extractor(self.default_train).features)
 
         df = self.default_train.metadata.copy()
         # filter using self.identity_train_labeled
-        df = df[df['identity'].isin(self.identity_train_labeled)]
+        df = df[df["identity"].isin(self.identity_train_labeled)]
 
-        for identity, group in df.groupby('identity'):
+        for identity, group in df.groupby("identity"):
             # Select the corresponding images and features for each identity
             indices = group.index.tolist()
 
@@ -141,9 +180,13 @@ class WildlifeDatasets:
 
             # sort identity samples by cosine distance to centroid
             if self.metric == "precomputed":
-                distances = distance.cdist(identity_features, [centroid], metric='jaccard').flatten()
+                distances = distance.cdist(
+                    identity_features, [centroid], metric="jaccard"
+                ).flatten()
             else:
-                distances = distance.cdist(identity_features, [centroid], metric=self.metric).flatten()
+                distances = distance.cdist(
+                    identity_features, [centroid], metric=self.metric
+                ).flatten()
             # import pdb; pdb.set_trace()
             # n_identity_features = len(identity_features)
             # X = np.stack([identity_features, centroid], axis=0)
@@ -153,27 +196,33 @@ class WildlifeDatasets:
             # distances = distances[idxs].flatten()
             sorted_indices = np.argsort(distances)
 
-            # distance_matrix = 
+            # distance_matrix =
 
             if len(sorted_indices) <= K:
                 representative_gallery.append(group.iloc[sorted_indices])
                 to_remove = group.index[sorted_indices]
-                self.default_train.metadata = self.default_train.metadata.drop(to_remove)
+                self.default_train.metadata = self.default_train.metadata.drop(
+                    to_remove
+                )
                 continue
             # central points are the closest 50% points from the centroid of the cluster
-            central_points = sorted_indices[:int(np.ceil(len(sorted_indices) * 0.5))]
+            central_points = sorted_indices[: int(np.ceil(len(sorted_indices) * 0.5))]
 
             if len(central_points) <= K:
                 representative_gallery.append(group.iloc[sorted_indices[:K]])
                 to_remove = group.index[sorted_indices[:K]]
-                self.default_train.metadata = self.default_train.metadata.drop(to_remove)
+                self.default_train.metadata = self.default_train.metadata.drop(
+                    to_remove
+                )
                 continue
 
             # sample K points from central_points
-            sampled_indices = np.random.choice(sorted_indices[:len(central_points)], K, replace=False)
+            sampled_indices = np.random.choice(
+                sorted_indices[: len(central_points)], K, replace=False
+            )
             # get the sampled images
             representative_gallery.append(group.iloc[sampled_indices])
-            
+
             to_remove = group.index[sampled_indices]
             # remove indices from the train set
             self.default_train.metadata = self.default_train.metadata.drop(to_remove)
@@ -188,21 +237,25 @@ class WildlifeDatasets:
 
         return representative_gallery
 
-    def get_representative_gallery_from_test(self, model, device="cuda", num_workers=8, batch_size=32):
+    def get_representative_gallery_from_test(
+        self, model, device="cuda", num_workers=8, batch_size=32
+    ):
         # Split the test set into labeled and unlabeled sets.
         # The labeled set is used as the representative gallery set for re-identification
         representative_gallery = []
         K = self.images_per_id
 
-        feature_extractor = DeepFeatures(model, device=device, num_workers=num_workers, batch_size=batch_size)
+        feature_extractor = DeepFeatures(
+            model, device=device, num_workers=num_workers, batch_size=batch_size
+        )
         test_features = np.array(feature_extractor(self.default_query).features)
 
         # df = self.default_query.metadata.copy()
         df = self.test_split.copy()
         # filter using self.identity_train_labeled
-        df = df[df['identity'].isin(self.identity_test_closed)]
+        df = df[df["identity"].isin(self.identity_test_closed)]
 
-        for identity, group in df.groupby('identity'):
+        for identity, group in df.groupby("identity"):
             # Select the corresponding images and features for each identity
             indices = group.index.tolist()
 
@@ -211,9 +264,13 @@ class WildlifeDatasets:
 
             # sort identity samples by cosine distance to centroid
             if self.metric == "precomputed":
-                distances = distance.cdist(identity_features, [centroid], metric='jaccard').flatten()
+                distances = distance.cdist(
+                    identity_features, [centroid], metric="jaccard"
+                ).flatten()
             else:
-                distances = distance.cdist(identity_features, [centroid], metric=self.metric).flatten()
+                distances = distance.cdist(
+                    identity_features, [centroid], metric=self.metric
+                ).flatten()
             sorted_indices = np.argsort(distances)
 
             if len(sorted_indices) <= K:
@@ -223,7 +280,7 @@ class WildlifeDatasets:
                 self.test_split_closed = self.test_split_closed.drop(to_remove)
                 continue
             # central points are the closest 50% points from the centroid of the cluster
-            central_points = sorted_indices[:int(np.ceil(len(sorted_indices) * 0.5))]
+            central_points = sorted_indices[: int(np.ceil(len(sorted_indices) * 0.5))]
 
             if len(central_points) <= K:
                 representative_gallery.append(group.iloc[sorted_indices[:K]])
@@ -233,7 +290,9 @@ class WildlifeDatasets:
                 continue
 
             # sample K points from central_points
-            sampled_indices = np.random.choice(sorted_indices[:len(central_points)], K, replace=False)
+            sampled_indices = np.random.choice(
+                sorted_indices[: len(central_points)], K, replace=False
+            )
             # get the sampled images
             representative_gallery.append(group.iloc[sampled_indices])
             to_remove = group.index[sampled_indices]
@@ -255,7 +314,7 @@ class WildlifeDatasets:
         database = WildlifeDataset(
             metadata=self.train_split,
             root=self.image_root,
-            transform=self.train_transform
+            transform=self.train_transform,
         )
 
         # splitter = splits.ClosedSetSplit(0.8)
@@ -278,7 +337,7 @@ class WildlifeDatasets:
         database = WildlifeDataset(
             metadata=self.train_split,
             root=self.image_root,
-            transform=self.test_transform
+            transform=self.test_transform,
         )
         # splitter = splits.ClosedSetSplit(0.8)
         # idx_train, idx_val = splitter.split(database.metadata)[0]
@@ -295,4 +354,3 @@ class WildlifeDatasets:
         # )
 
         return database
-

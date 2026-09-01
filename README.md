@@ -99,6 +99,11 @@ Not a Table 1 row, but measured for comparison:
 |---|---|---|---|---|---|---|---|
 | MegaDescriptor-L-224, real weights | 4 | 53.34 ±0.16 | 32.86 | 67.90 | 68.30 | 67.78 | 85.91 |
 
+This row is a **side experiment, not a Table 1 row**: it exists only to confirm that the
+paper's "MegaDescriptor" row is really ImageNet Swin-L. It is also no longer reproducible —
+it needed a bypass of the `get_model` swap that has since been reverted. The Table 1 row is
+the foundation row above; `scripts/run_row.sh megadescriptor` runs it the authors' way.
+
 **ResNet-50 Baseline: −0.65 mAP.** This is the load-bearing result — it uses no training at
 all, so it isolates the ≈1-point deficit on the trained rows to training numerics rather
 than to the data splits, gallery construction, evaluation code or metrics, all of which
@@ -266,7 +271,7 @@ outputs_initial/                         frozen, read-only; see its own README.m
     logs_al/combined/results.csv                             <- per-cycle micro mAP
   table1/<row>/s<seed>/                  baseline / foundation / skyline, seeds 0-3
     pretrained_models/**/evaluation_metrics_0.json
-    <row> = resnet50_baseline | swin_foundation | megadescriptor
+    <row> = resnet50_baseline | swin_foundation | megadescriptor_realweights
           | resnet50_skyline_e{30,50}_{zerobased,offset}
 ```
 

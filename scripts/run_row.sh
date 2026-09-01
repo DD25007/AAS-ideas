@@ -19,25 +19,33 @@ case "$ROW" in
   resnet50_skyline_e50_zerobased) ARGS="--skyline --model_name resnet50 --epochs 50"; export SKYLINE_LABEL_MODE=zerobased ;;
   resnet50_skyline_e50_offset)    ARGS="--skyline --model_name resnet50 --epochs 50"; export SKYLINE_LABEL_MODE=offset ;;
 
-  # The published "MegaDescriptor" foundation row. Passing the plain timm name is
-  # deliberate: get_model's MegaDescriptor->Swin-L swap does not match it, so this loads
-  # ImageNet Swin-L directly rather than relying on the swap to do it.
+  # Table 1's "MegaDescriptor" foundation row, invoked exactly as the authors invoked it.
+  # get_model substitutes plain ImageNet swin_large_patch4_window7_224 for this name
+  # whenever --dataset combined ("Do not use pre-trained megadescriptor", utils.py:923).
+  # That substitution is INTENDED and is what the published 45.65 went through -- do not
+  # "fix" it (Todo.md item 15). Output lands under run_suffix "mdl".
+  megadescriptor)
+    echo "note: get_model substitutes ImageNet Swin-L for MegaDescriptor-L-224 under" >&2
+    echo "      --dataset combined. This is the authors' path and is intended." >&2
+    ARGS="--baseline --model_name hf-hub:BVRA/MegaDescriptor-L-224" ;;
+
+  # The same model reached by naming it directly, so the swap never fires. Numerically
+  # identical to `megadescriptor` -- get_model just rewrites the name before create_model --
+  # but lands under run_suffix "swinL_in". This is what the frozen baseline used.
   swin_foundation)                ARGS="--baseline --model_name swin_large_patch4_window7_224" ;;
 
-  megadescriptor)
+  megadescriptor_realweights)
     cat >&2 <<'MSG'
-run_row.sh: the `megadescriptor` row (real MegaDescriptor weights, 53.34 mAP) cannot be
-re-run as-is.
+run_row.sh: the real-MegaDescriptor-weights measurement (53.34 mAP) cannot be re-run as-is.
 
-Those runs were produced while a local --baseline bypass of the get_model swap was active.
-That bypass has since been reverted (correctly -- the swap is what the *published* numbers
-went through; see README "The paper's MegaDescriptor row is ImageNet Swin-L" and Todo.md
-item 15). With the swap live, --model_name hf-hub:BVRA/MegaDescriptor-L-224 under
---dataset combined silently loads ImageNet Swin-L, so this row would duplicate
-swin_foundation while claiming to be MegaDescriptor.
+It is NOT a Table 1 row -- it was a side experiment confirming that the paper's
+"MegaDescriptor" row is really ImageNet Swin-L. Those runs were produced while a local
+--baseline bypass of the get_model swap was active; that bypass has since been reverted,
+correctly, because the swap is the authors' path (Todo.md item 15).
 
-Re-running it needs an explicit opt-out of the swap (a --no_model_swap flag), which does
-not exist yet. The frozen results are in outputs_initial/table1/megadescriptor/.
+Reproducing it would need an explicit swap opt-out (a --no_model_swap flag) that does not
+exist. Frozen results: outputs_initial/table1/megadescriptor_realweights/.
+Use `megadescriptor` for the actual Table 1 row.
 MSG
     exit 2 ;;
 

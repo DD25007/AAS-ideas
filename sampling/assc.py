@@ -1,10 +1,10 @@
 from sampling.base import BaseSampling
-from active_semi_clustering.active.pairwise_constraints import ExampleOracle as ExampleOracle_, \
-    ExploreConsolidate as ExploreConsolidate_, \
-    MinMax as MinMax_
+from active_semi_clustering.active.pairwise_constraints import (
+    ExampleOracle as ExampleOracle_,
+    ExploreConsolidate as ExploreConsolidate_,
+    MinMax as MinMax_,
+)
 import numpy as np
-from scipy.spatial.distance import pdist, squareform
-import math
 
 from utils import constrained_clustering
 
@@ -16,8 +16,14 @@ class MinMax(BaseSampling):
 
     def select(self, features=None, **kwargs):
         assert features is not None
-        self.K = np.unique(constrained_clustering(features, method="FINCH", ml_pairs=self.ml_pairs, cl_pairs=self.cl_pairs)).shape[0]
-        oracle = ExampleOracle_(self.database.metadata.identity.values, max_queries_cnt=self.n)
+        self.K = np.unique(
+            constrained_clustering(
+                features, method="FINCH", ml_pairs=self.ml_pairs, cl_pairs=self.cl_pairs
+            )
+        ).shape[0]
+        oracle = ExampleOracle_(
+            self.database.metadata.identity.values, max_queries_cnt=self.n
+        )
         active_learner = MinMax_(n_clusters=self.K)
         active_learner.fit(features, oracle=oracle)
         pairwise_constraints = active_learner.pairwise_constraints_
@@ -33,8 +39,14 @@ class ExploreConsolidate(BaseSampling):
 
     def select(self, features=None, **kwargs):
         assert features is not None
-        self.K = np.unique(constrained_clustering(features, method="FINCH", ml_pairs=self.ml_pairs, cl_pairs=self.cl_pairs)).shape[0]
-        oracle = ExampleOracle_(self.database.metadata.identity.values, max_queries_cnt=self.n)
+        self.K = np.unique(
+            constrained_clustering(
+                features, method="FINCH", ml_pairs=self.ml_pairs, cl_pairs=self.cl_pairs
+            )
+        ).shape[0]
+        oracle = ExampleOracle_(
+            self.database.metadata.identity.values, max_queries_cnt=self.n
+        )
         active_learner = ExploreConsolidate_(n_clusters=self.K)
         active_learner.fit(features, oracle=oracle)
         pairwise_constraints = active_learner.pairwise_constraints_

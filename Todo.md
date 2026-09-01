@@ -21,6 +21,12 @@ breaks on upgrade. **ENV** = environment/packaging, no code change needed.
 > | `SpCL/examples/al_spcl_train_usl.py` | `train_al.py` |
 > | `SpCL/spcl/utils/faiss_utils.py` | gone — use the repo-root `faiss_utils.py` |
 > | `outputs*/…` | `outputs_initial/{al,table1}/<row>/s<seed>/` |
+> | the real-MegaDescriptor runs | `outputs_initial/table1/megadescriptor_realweights/` |
+>
+> The row name `megadescriptor` now means Table 1's foundation row run **the authors' way**
+> — `--model_name hf-hub:BVRA/MegaDescriptor-L-224`, which `get_model` substitutes to
+> ImageNet Swin-L (item 15). The real-weights side experiment keeps the explicit
+> `_realweights` suffix so the two can never be confused.
 >
 > The environment is now `hitl` (a clone of `alm`); `alm` is preserved untouched.
 

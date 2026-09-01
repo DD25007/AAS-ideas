@@ -57,7 +57,8 @@ TABLE1_ROWS = [
     ("resnet50_skyline_e30_offset", "Skyline, 30 ep, offset"),
     ("resnet50_skyline_e50_zerobased", "Skyline, 50 ep, zerobased"),
     ("resnet50_skyline_e50_offset", "Skyline, 50 ep, offset"),
-    ("megadescriptor", "MegaDescriptor-L-224, real weights"),
+    ("megadescriptor",             "MegaDescriptor row, authors' path (= ImageNet Swin-L)"),
+    ("megadescriptor_realweights", "MegaDescriptor-L-224, real weights (side experiment)"),
 ]
 
 

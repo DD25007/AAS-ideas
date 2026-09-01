@@ -16,6 +16,7 @@ Each JSON holds one 13-element list per metric, one entry per dataset. The macro
 the mean over those 13, then over seeds -- matching the paper's protocol. The per-epoch mAP
 in the logs is the *micro* (pooled) score and is deliberately not used here.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,34 +30,34 @@ import sys
 # Display order, and how each maps into the JSON. Top-N are already percentages; the rest
 # are stored as fractions and scale by 100.
 METRICS = [
-    ("mAP",     "mAP",              100.0),
-    ("mINP",    "mINP",             100.0),
-    ("BAKS",    "BAKS",             100.0),
-    ("AUC ROC", "ROC AUC",          100.0),
-    ("Top-1",   "Top-1 Accuracy",     1.0),
-    ("Top-3",   "Top-3 Accuracy",     1.0),
-    ("Top-5",   "Top-5 Accuracy",     1.0),
-    ("Top-10",  "Top-10 Accuracy",    1.0),
+    ("mAP", "mAP", 100.0),
+    ("mINP", "mINP", 100.0),
+    ("BAKS", "BAKS", 100.0),
+    ("AUC ROC", "ROC AUC", 100.0),
+    ("Top-1", "Top-1 Accuracy", 1.0),
+    ("Top-3", "Top-3 Accuracy", 1.0),
+    ("Top-5", "Top-5 Accuracy", 1.0),
+    ("Top-10", "Top-10 Accuracy", 1.0),
 ]
 
 # sampler directory -> the row label used in README.md
 AL_ROWS = [
-    ("USL",    "SpCL (Base)"),
+    ("USL", "SpCL (Base)"),
     ("random", "+ Random"),
-    ("GBAS",   "+ GBAS"),
-    ("LBAS",   "+ LBAS"),
-    ("CC",     "+ NIS"),
+    ("GBAS", "+ GBAS"),
+    ("LBAS", "+ LBAS"),
+    ("CC", "+ NIS"),
     ("ConSam", "+ AAS"),
 ]
 
 TABLE1_ROWS = [
-    ("resnet50_baseline",              "ResNet-50 (Baseline)"),
-    ("swin_foundation",                "Foundation row (ImageNet Swin-L)"),
+    ("resnet50_baseline", "ResNet-50 (Baseline)"),
+    ("swin_foundation", "Foundation row (ImageNet Swin-L)"),
     ("resnet50_skyline_e30_zerobased", "Skyline, 30 ep, zerobased"),
-    ("resnet50_skyline_e30_offset",    "Skyline, 30 ep, offset"),
+    ("resnet50_skyline_e30_offset", "Skyline, 30 ep, offset"),
     ("resnet50_skyline_e50_zerobased", "Skyline, 50 ep, zerobased"),
-    ("resnet50_skyline_e50_offset",    "Skyline, 50 ep, offset"),
-    ("megadescriptor",                 "MegaDescriptor-L-224, real weights"),
+    ("resnet50_skyline_e50_offset", "Skyline, 50 ep, offset"),
+    ("megadescriptor", "MegaDescriptor-L-224, real weights"),
 ]
 
 
@@ -89,14 +90,27 @@ def find_runs(root):
 
     for sampler, _ in AL_ROWS:
         for d in sorted(glob.glob(os.path.join(root, "al", sampler, "s*"))):
-            seed = int(os.path.basename(d)[1:])
-            f = os.path.join(d, "wildlife", "combined", "evaluation",
-                             "evaluation_metrics_52.json")
+            m = re.fullmatch(r"s(\d+)", os.path.basename(d))
+            if not m:
+                continue  # e.g. an archived s3.failed131739 attempt
+            seed = int(m.group(1))
+            f = os.path.join(
+                d, "wildlife", "combined", "evaluation", "evaluation_metrics_52.json"
+            )
             if not os.path.exists(f):
                 # a shortened smoke run stops at an earlier cycle
-                cands = sorted(glob.glob(os.path.join(
-                    d, "wildlife", "combined", "evaluation", "evaluation_metrics_*.json")),
-                    key=lambda p: int(re.search(r"_(\d+)\.json$", p).group(1)))
+                cands = sorted(
+                    glob.glob(
+                        os.path.join(
+                            d,
+                            "wildlife",
+                            "combined",
+                            "evaluation",
+                            "evaluation_metrics_*.json",
+                        )
+                    ),
+                    key=lambda p: int(re.search(r"_(\d+)\.json$", p).group(1)),
+                )
                 if not cands:
                     continue
                 f = cands[-1]
@@ -104,12 +118,20 @@ def find_runs(root):
 
     for row, _ in TABLE1_ROWS:
         for d in sorted(glob.glob(os.path.join(root, "table1", row, "s*"))):
-            seed = int(os.path.basename(d)[1:])
-            hits = glob.glob(os.path.join(d, "**", "evaluation_metrics_*.json"), recursive=True)
+            m = re.fullmatch(r"s(\d+)", os.path.basename(d))
+            if not m:
+                continue  # e.g. an archived s3.failed131739 attempt
+            seed = int(m.group(1))
+            hits = glob.glob(
+                os.path.join(d, "**", "evaluation_metrics_*.json"), recursive=True
+            )
             if not hits:
                 continue
             if len(hits) > 1:
-                print(f"warning: {d} has {len(hits)} eval files, using {hits[0]}", file=sys.stderr)
+                print(
+                    f"warning: {d} has {len(hits)} eval files, using {hits[0]}",
+                    file=sys.stderr,
+                )
             runs.setdefault(("table1", row), {})[seed] = macro(hits[0])
 
     return runs
@@ -121,14 +143,20 @@ def summarise(runs):
     for key, per_seed in runs.items():
         agg = {}
         for label, _, _ in METRICS:
-            vals = [per_seed[s][label] for s in sorted(per_seed) if label in per_seed[s]]
+            vals = [
+                per_seed[s][label] for s in sorted(per_seed) if label in per_seed[s]
+            ]
             if not vals:
                 continue
             agg[label] = (
                 statistics.mean(vals),
                 statistics.stdev(vals) if len(vals) > 1 else 0.0,
                 len(vals),
-                {s: per_seed[s][label] for s in sorted(per_seed) if label in per_seed[s]},
+                {
+                    s: per_seed[s][label]
+                    for s in sorted(per_seed)
+                    if label in per_seed[s]
+                },
             )
         out[key] = agg
     return out
@@ -151,7 +179,9 @@ def table(summary, kind, rows, title, show_std):
                 cells.append("--")
                 continue
             mean, std, _, _ = agg[c]
-            cells.append(f"{mean:.2f} ±{std:.2f}" if show_std and std else f"{mean:.2f}")
+            cells.append(
+                f"{mean:.2f} ±{std:.2f}" if show_std and std else f"{mean:.2f}"
+            )
         lines.append(f"| {label} | {n} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
@@ -160,7 +190,13 @@ def per_seed_table(summary, kind, rows, title, metric="mAP"):
     present = [(d, label) for d, label in rows if (kind, d) in summary]
     if not present:
         return ""
-    seeds = sorted({s for d, _ in present for s in summary[(kind, d)].get(metric, (0, 0, 0, {}))[3]})
+    seeds = sorted(
+        {
+            s
+            for d, _ in present
+            for s in summary[(kind, d)].get(metric, (0, 0, 0, {}))[3]
+        }
+    )
     lines = [f"### {title} — per-seed {metric}", ""]
     lines.append("| Method | " + " | ".join(f"s{s}" for s in seeds) + " | std |")
     lines.append("|---|" + "---|" * (len(seeds) + 1))
@@ -179,8 +215,15 @@ def render(root):
     parts = [f"## {root}\n"]
     parts.append(table(summary, "al", AL_ROWS, "Active Learning block", show_std=False))
     parts.append(per_seed_table(summary, "al", AL_ROWS, "Active Learning block"))
-    parts.append(table(summary, "table1", TABLE1_ROWS,
-                       "Baseline / foundation / skyline", show_std=True))
+    parts.append(
+        table(
+            summary,
+            "table1",
+            TABLE1_ROWS,
+            "Baseline / foundation / skyline",
+            show_std=True,
+        )
+    )
     return summary, "\n".join(p for p in parts if p)
 
 
@@ -220,23 +263,40 @@ def compare(a_root, b_root, tol):
         print("-" * 72)
         for r, m, av, bv, d in rows:
             print(f"{r:<24} {m:<9} {av:>12.4f} {bv:>12.4f} {d:>+10.4f}")
-        print(f"\nFAIL: {len(rows)} cell(s) exceed tol={tol}; largest |delta| = {worst:.4f}")
+        print(
+            f"\nFAIL: {len(rows)} cell(s) exceed tol={tol}; largest |delta| = {worst:.4f}"
+        )
         return 1
 
-    print(f"\nPASS: all {len(shared)} shared rows within tol={tol} "
-          f"(largest |delta| = {worst:.4f})")
+    print(
+        f"\nPASS: all {len(shared)} shared rows within tol={tol} "
+        f"(largest |delta| = {worst:.4f})"
+    )
     return 0
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("root", nargs="?", default="outputs_initial",
-                   help="output tree to summarise (default: outputs_initial)")
-    p.add_argument("--compare", nargs=2, metavar=("BASELINE", "CANDIDATE"),
-                   help="diff two trees and exit non-zero if any cell moves beyond --tol")
-    p.add_argument("--tol", type=float, default=0.0,
-                   help="allowed absolute delta per cell (default 0.0 = exact)")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "root",
+        nargs="?",
+        default="outputs_initial",
+        help="output tree to summarise (default: outputs_initial)",
+    )
+    p.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("BASELINE", "CANDIDATE"),
+        help="diff two trees and exit non-zero if any cell moves beyond --tol",
+    )
+    p.add_argument(
+        "--tol",
+        type=float,
+        default=0.0,
+        help="allowed absolute delta per cell (default 0.0 = exact)",
+    )
     args = p.parse_args()
 
     if args.compare:

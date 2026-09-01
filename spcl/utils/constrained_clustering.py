@@ -1,50 +1,20 @@
 from __future__ import print_function, absolute_import
-import argparse
-import os.path as osp
-import random
 import numpy as np
-import sys
-import collections
-import copy
-import time
-from datetime import timedelta
 
-from sklearn.cluster import DBSCAN
-
-import torch
-from torch import nn
-from torch.backends import cudnn
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-
-from spcl import datasets
-from spcl import models
-from spcl.models.hm import HybridMemory
-from spcl.trainers import SpCLTrainer_USL
-from spcl.evaluators import Evaluator, extract_features
-from spcl.utils.data import IterLoader
-from spcl.utils.data import transforms as T
-from spcl.utils.data.sampler import RandomMultipleGallerySampler
-from spcl.utils.data.preprocessor import Preprocessor
-from spcl.utils.logging import Logger
-from spcl.utils.serialization import load_checkpoint, save_checkpoint, copy_state_dict
-from spcl.utils.faiss_rerank import compute_jaccard_distance
-
-from collections import defaultdict
 import itertools
 import networkx as nx
-from sklearn.metrics import pairwise_distances
 
 
 def FINCH(
-        data,
-        initial_rank=None,
-        req_clust=None,
-        distance='cosine',
-        ensure_early_exit=True,
-        verbose=True,
-        use_ann_above_samples=70000):
-    """ FINCH clustering algorithm.
+    data,
+    initial_rank=None,
+    req_clust=None,
+    distance="cosine",
+    ensure_early_exit=True,
+    verbose=True,
+    use_ann_above_samples=70000,
+):
+    """FINCH clustering algorithm.
     :param data: Input matrix with features in rows.
     :param initial_rank: Nx1 first integer neighbor indices (optional).
     :param req_clust: Set output number of clusters (optional). Not recommended.
@@ -68,15 +38,14 @@ def FINCH(
     """
 
     from finch.finch import clust_rank, get_clust, get_merge
+
     # Cast input data to float32
     data = data.astype(np.float32)
 
     min_sim = None
-    adj, orig_dist = clust_rank(data,
-                                use_ann_above_samples,
-                                initial_rank,
-                                distance,
-                                verbose)
+    adj, orig_dist = clust_rank(
+        data, use_ann_above_samples, initial_rank, distance, verbose
+    )
     initial_rank = None
     group, num_clust = get_clust(adj, [], min_sim)
     c, mat = get_merge([], group, data)
@@ -88,17 +57,27 @@ def FINCH(
     return c
 
 
-def constrained_clustering(labels, rerank_dist, method, min_samples=5, metric="precomputed",
-                           ml_pairs=[], cl_pairs=[], sanity_check=False):
+def constrained_clustering(
+    labels,
+    rerank_dist,
+    method,
+    min_samples=5,
+    metric="precomputed",
+    ml_pairs=[],
+    cl_pairs=[],
+    sanity_check=False,
+):
     if len(ml_pairs) == 0 and len(cl_pairs) == 0:
         return labels
 
     if method == "DBSCAN":
-        labels[labels == -1] = np.arange(labels.max() + 1, labels.max() + 1 + sum(labels == -1))
+        labels[labels == -1] = np.arange(
+            labels.max() + 1, labels.max() + 1 + sum(labels == -1)
+        )
 
     # Step 1: Merge clusters under Must-Link constraints
     cluster_id = labels.max() + 1
-    for (a, b) in ml_pairs:
+    for a, b in ml_pairs:
         cluster_a = labels[a]
         cluster_b = labels[b]
         if cluster_a == -1 and cluster_b == -1:
@@ -132,11 +111,13 @@ def constrained_clustering(labels, rerank_dist, method, min_samples=5, metric="p
             ml_graph.add_edges_from(clust_ml_pairs)
             # Step 2: Find ML components
             ml_components = list(nx.connected_components(ml_graph))
-            comp_map = {pt: idx for idx, comp in enumerate(ml_components) for pt in comp}
+            comp_map = {
+                pt: idx for idx, comp in enumerate(ml_components) for pt in comp
+            }
             # Step 3: Build conflict graph (G_CL)
             conflict_graph = nx.Graph()
             conflict_graph.add_nodes_from(range(len(ml_components)))
-            for (a, b) in clust_cl_pairs:
+            for a, b in clust_cl_pairs:
                 ca, cb = comp_map[a], comp_map[b]
                 if ca != cb:
                     conflict_graph.add_edge(ca, cb)
@@ -147,17 +128,17 @@ def constrained_clustering(labels, rerank_dist, method, min_samples=5, metric="p
             comp_to_chromatic = []
             for comp in conflict_graph_comps:
                 subgraph = conflict_graph.subgraph(comp)
-                coloring = nx.coloring.greedy_color(subgraph, strategy='largest_first')
+                coloring = nx.coloring.greedy_color(subgraph, strategy="largest_first")
                 chromatic_number = max(coloring.values()) + 1
                 comp_to_chromatic.append((comp, chromatic_number))
 
             # Sort by chromatic number (descending), break ties by size
             conflict_graph_comps_sorted = sorted(
-                comp_to_chromatic,
-                key=lambda x: (x[1], len(x[0])),
-                reverse=True
+                comp_to_chromatic, key=lambda x: (x[1], len(x[0])), reverse=True
             )
-            conflict_graph_comps_sorted = [comp for comp, _ in conflict_graph_comps_sorted]
+            conflict_graph_comps_sorted = [
+                comp for comp, _ in conflict_graph_comps_sorted
+            ]
 
             # Prepare mapping from component idx to member points
             # Initialize new mapping of cluster_id to list of points
@@ -168,7 +149,7 @@ def constrained_clustering(labels, rerank_dist, method, min_samples=5, metric="p
             if len(largest_component) > 1:
                 # Subgraph for largest_component
                 subG = conflict_graph.subgraph(largest_component).copy()
-                coloring = nx.coloring.greedy_color(subG, strategy='largest_first')
+                coloring = nx.coloring.greedy_color(subG, strategy="largest_first")
                 # Assign new cluster IDs
                 for comp_idx, color in coloring.items():
                     sub_id = cluster_id
@@ -183,6 +164,7 @@ def constrained_clustering(labels, rerank_dist, method, min_samples=5, metric="p
             # Process remaining components via assignment
             for comp_set in conflict_graph_comps_sorted[1:]:
                 from scipy.optimize import linear_sum_assignment
+
                 # Build cost matrix: comps in comp_set x existing subclusters
                 existing_ids = list(cluster_id_to_points.keys())
                 m = len(comp_set)
@@ -222,16 +204,20 @@ def constrained_clustering(labels, rerank_dist, method, min_samples=5, metric="p
 
     if sanity_check:
         # Sanity check for constraints
-        for (a, b) in ml_pairs:
+        for a, b in ml_pairs:
             if labels[a] != labels[b]:
                 print(f"{a}, {b}, {labels[[a, b]]}")
                 # import pdb;
                 # pdb.set_trace()
-            assert labels[a] == labels[b], "must-link constraint violated. Implementation error"
-        for (a, b) in cl_pairs:
+            assert (
+                labels[a] == labels[b]
+            ), "must-link constraint violated. Implementation error"
+        for a, b in cl_pairs:
             if labels[a] == labels[b] and labels[a] != -1:
                 print(f"{a}, {b}, {labels[[a, b]]}")
                 # import pdb;
                 # pdb.set_trace()
-            assert labels[a] != labels[b] or labels[a] == -1, "cannot-link constraint violated. Implementation error"
+            assert (
+                labels[a] != labels[b] or labels[a] == -1
+            ), "cannot-link constraint violated. Implementation error"
     return labels

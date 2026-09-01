@@ -1,11 +1,8 @@
 from __future__ import absolute_import
-import os
 import os.path as osp
-from torch.utils.data import DataLoader, Dataset
-import numpy as np
-import random
-import math
+from torch.utils.data import Dataset
 from PIL import Image
+
 
 class Preprocessor(Dataset):
     def __init__(self, dataset, root=None, transform=None):
@@ -26,7 +23,7 @@ class Preprocessor(Dataset):
         if self.root is not None:
             fpath = osp.join(self.root, fname)
 
-        img = Image.open(fpath).convert('RGB')
+        img = Image.open(fpath).convert("RGB")
 
         if self.transform is not None:
             img = self.transform(img)

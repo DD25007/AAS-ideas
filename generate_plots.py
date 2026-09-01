@@ -20,7 +20,7 @@ thresh = 0.2
 for dataset_name in os.listdir(base_dir):
     # if dataset_name not in ['MPDD', 'DogFaceNet']:
     #     continue
-    if dataset_name in ['skyline', 'baseline', 'plots']:
+    if dataset_name in ["skyline", "baseline", "plots"]:
         continue
     dataset_path = os.path.join(base_dir, dataset_name)
     if not os.path.isdir(dataset_path):
@@ -35,7 +35,7 @@ for dataset_name in os.listdir(base_dir):
             continue
 
         # Load JSON
-        with open(method_path, 'r') as f:
+        with open(method_path, "r") as f:
             log = json.load(f)
 
         # Extract accuracy per step
@@ -62,17 +62,17 @@ for dataset_name in os.listdir(base_dir):
             "steps": steps,
             "accuracies": results,
             "identities": identities,
-            "annotations": annotations
+            "annotations": annotations,
         }
 
     # Plot per accuracy type (Top-1, Top-3, Top-5)
     for acc_key in accuracy_keys:
         plt.figure(figsize=(8, 5))
-        for i, method in enumerate(['random', 'LBAS', 'MinMax', 'EC', 'CC', 'ConSam']):
+        for i, method in enumerate(["random", "LBAS", "MinMax", "EC", "CC", "ConSam"]):
             try:
                 res = method_results[method]
             except:
-                method = method + '_no_outliers'
+                method = method + "_no_outliers"
                 try:
                     res = method_results[method]
                 except:
@@ -83,34 +83,40 @@ for dataset_name in os.listdir(base_dir):
                 # np.array(res["annotations"]["Number of +ve Annotations"]) + np.array(res["annotations"]["Number of -ve Annotations"]),
                 res["steps"],
                 res["accuracies"][acc_key],
-                label=method.replace('_no_outliers', ''),
-                marker='o'
+                label=method.replace("_no_outliers", ""),
+                marker="o",
             )
 
-        method_path = os.path.join(dataset_path, 'skyline', 'mean_accuracy_0_5.json')
+        method_path = os.path.join(dataset_path, "skyline", "mean_accuracy_0_5.json")
         if not os.path.exists(method_path):
             continue
         # Load JSON
-        with open(method_path, 'r') as f:
+        with open(method_path, "r") as f:
             log = json.load(f)
 
-        plt.axhline(y=log['Mean'][acc_key], label="Skyline", linestyle='--', color='green')
-        method_path = os.path.join(dataset_path, 'baseline', 'mean_accuracy_0_5.json')
+        plt.axhline(
+            y=log["Mean"][acc_key], label="Skyline", linestyle="--", color="green"
+        )
+        method_path = os.path.join(dataset_path, "baseline", "mean_accuracy_0_5.json")
         if not os.path.exists(method_path):
             continue
         # Load JSON
-        with open(method_path, 'r') as f:
+        with open(method_path, "r") as f:
             log = json.load(f)
-        plt.axhline(y=log['Mean'][acc_key], label="Baseline", linestyle='--', color='red')
+        plt.axhline(
+            y=log["Mean"][acc_key], label="Baseline", linestyle="--", color="red"
+        )
 
         plt.title(f"{dataset_name} - {acc_key}")
         plt.xlabel("Annotation Step")
         plt.ylabel("Accuracy (%)")
-        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.grid(True, linestyle="--", alpha=0.6)
         plt.legend()
         plt.tight_layout()
         os.makedirs(f"{base_dir}/plots/{thresh}/{acc_key}", exist_ok=True)
-        plt.savefig(f"{base_dir}/plots/{thresh}/{acc_key}/{dataset_name}_{acc_key.replace(' ', '_')}.png")
+        plt.savefig(
+            f"{base_dir}/plots/{thresh}/{acc_key}/{dataset_name}_{acc_key.replace(' ', '_')}.png"
+        )
         plt.close()
 
     # Plot pseudo-identities vs ground-truth identities
@@ -121,7 +127,7 @@ for dataset_name in os.listdir(base_dir):
     pseudo_values = []
     gt_values = []
 
-    for method in ['random', 'LBAS', 'MinMax', 'EC', 'CC', 'ConSam']:
+    for method in ["random", "LBAS", "MinMax", "EC", "CC", "ConSam"]:
         if method_results.get(method) is None:
             continue
         pseudo = method_results[method]["identities"]["Number of pseudo-identities"]
@@ -134,13 +140,13 @@ for dataset_name in os.listdir(base_dir):
             methods_for_bar.append(method)
 
     x = np.arange(len(methods_for_bar))
-    plt.bar(x - width / 2, gt_values, width, label='GT-Identities')
-    plt.bar(x + width / 2, pseudo_values, width, label='Pseudo-Identities')
+    plt.bar(x - width / 2, gt_values, width, label="GT-Identities")
+    plt.bar(x + width / 2, pseudo_values, width, label="Pseudo-Identities")
 
     plt.xticks(x, methods_for_bar, rotation=45)
     plt.ylabel("Number of Identities")
     plt.title(f"{dataset_name} - Count of Sampled Identities at 5n Budget")
-    plt.grid(True, axis='y', linestyle='--', alpha=0.6)
+    plt.grid(True, axis="y", linestyle="--", alpha=0.6)
     plt.legend()
     plt.tight_layout()
     os.makedirs(f"{base_dir}/plots/{thresh}/identities", exist_ok=True)

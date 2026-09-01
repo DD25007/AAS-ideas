@@ -96,7 +96,9 @@ while true; do
     fi
 
     echo "${1}_s${2}" >> "$STATE"
-    tmux new-session -d -s "$(session_name "$gpu" "$1" "$2")" \
+    # `env -u LD_LIBRARY_PATH` so tmux itself does not load the conda env's libtinfo;
+    # $RUNNER sources common.sh and sets LD_LIBRARY_PATH for the python process anyway.
+    env -u LD_LIBRARY_PATH tmux new-session -d -s "$(session_name "$gpu" "$1" "$2")" \
         "bash $RUNNER $1 $2 $gpu $OUTROOT"
     log "launched $1 seed$2 on gpu$gpu (attempt $(attempts "$1" "$2"), $(nvidia-smi -i "$gpu" --query-gpu=memory.used --format=csv,noheader) used)"
     launched=1

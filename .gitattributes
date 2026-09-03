@@ -1,0 +1,8 @@
+# Normalise to LF everywhere. The repo previously mixed CRLF (root .py) with LF
+# (the vendored SpCL tree), which made every cross-tree diff unreadable: comparing
+# utils.py against its SpCL twin reported 3,374 differing lines when the true figure
+# was 134. See Todo.md C5.
+* text=auto eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf

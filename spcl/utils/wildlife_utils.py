@@ -142,6 +142,11 @@ def constrained_clustering(
     if metric == "precomputed":
         X = torch.tensor(X, dtype=torch.float32)
         X = F.normalize(X, dim=1).cuda()
+        # imported lazily: this module never imported it (the repo-root utils.py twin
+        # defines it in-file), so this line was a latent NameError. Local import keeps
+        # module import order unchanged.
+        from spcl.utils.faiss_rerank import compute_jaccard_distance
+
         rerank_dist = compute_jaccard_distance(X)
         if method == "FINCH":
             np.fill_diagonal(rerank_dist, 1e12)
@@ -369,16 +374,12 @@ def constrained_clustering(
         for a, b in ml_pairs:
             if labels[a] != labels[b]:
                 print(f"{a}, {b}, {labels[[a, b]]}")
-                # import pdb;
-                # pdb.set_trace()
             assert (
                 labels[a] == labels[b]
             ), "must-link constraint violated. Implementation error"
         for a, b in cl_pairs:
             if labels[a] == labels[b] and labels[a] != -1:
                 print(f"{a}, {b}, {labels[[a, b]]}")
-                # import pdb;
-                # pdb.set_trace()
             assert (
                 labels[a] != labels[b] or labels[a] == -1
             ), "cannot-link constraint violated. Implementation error"
@@ -507,16 +508,12 @@ def CDBSCAN(
         for a, b in ml_pairs:
             if labels[a] != labels[b]:
                 print(f"{a}, {b}, {labels[[a,b]]}")
-                # import pdb;
-                # pdb.set_trace()
             assert (
                 labels[a] == labels[b]
             ), "must-link constraint violated. Implementation error"
         for a, b in cl_pairs:
             if labels[a] == labels[b] and labels[a] != -1:
                 print(f"{a}, {b}, {labels[[a, b]]}")
-                # import pdb;
-                # pdb.set_trace()
             assert (
                 labels[a] != labels[b] or labels[a] == -1
             ), "cannot-link constraint violated. Implementation error"
@@ -617,18 +614,10 @@ def _CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[]):
 
     # Sanity check for constraints
     for a, b in ml_pairs:
-        if labels[a] != labels[b]:
-            import pdb
-
-            pdb.set_trace()
         assert (
             labels[a] == labels[b]
         ), "must-link constraint violated. Implementation error"
     for a, b in cl_pairs:
-        if labels[a] == labels[b] and labels[a] != -1:
-            import pdb
-
-            pdb.set_trace()
         assert (
             labels[a] != labels[b] or labels[a] == -1
         ), "cannot-link constraint violated. Implementation error"
@@ -757,18 +746,12 @@ def constrained_dbscan(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pai
         if labels[a] != labels[b]:
             print(f"{a}, {b}, {labels[[a, b]]}")
             break
-            import pdb
-
-            pdb.set_trace()
         assert (
             labels[a] == labels[b]
         ), "must-link constraint violated. Implementation error"
     for a, b in cl_pairs:
         if labels[a] == labels[b] and labels[a] != -1:
             print(f"{a}, {b}, {labels[[a, b]]}")
-            import pdb
-
-            pdb.set_trace()
         assert (
             labels[a] != labels[b] or labels[a] == -1
         ), "cannot-link constraint violated. Implementation error"
@@ -1499,8 +1482,42 @@ def auc_roc_new_class(
     return roc_auc_score(a, b)
 
 
+def _subset_features(feature_ds, positions, expect_metadata=None):
+    """Slice an already-extracted FeatureDataset instead of re-encoding the images.
+
+    O2/O6: every image in the evaluation was being encoded two to four times. The global
+    block encodes closed_query + query + gallery, then the per-dataset loop re-encodes
+    each of those again as `dataset == <name>` row subsets, and closed_query is itself a
+    row subset of query. Since wildlife_tools builds its loader with shuffle=False and
+    `WildlifeDataset.__init__` resets the metadata index, feature row i corresponds to
+    metadata row i, so every one of those subsets is a positional slice of a global
+    extraction.
+
+    `expect_metadata` is checked rather than trusted: if the slice ever stops matching
+    the frame the old code would have encoded, this raises instead of quietly changing
+    a published number.
+    """
+    from wildlife_tools.data import FeatureDataset
+
+    positions = np.asarray(positions, dtype=int)
+    if expect_metadata is not None:
+        got = feature_ds.metadata.iloc[positions].reset_index(drop=True)
+        exp = expect_metadata.reset_index(drop=True)
+        for col in ("path", "identity"):
+            if col in exp.columns and not got[col].equals(exp[col]):
+                raise AssertionError(
+                    f"_subset_features: positional slice disagrees on '{col}' "
+                    f"({len(got)} rows vs {len(exp)})"
+                )
+    return FeatureDataset(
+        features=feature_ds.features[positions],
+        metadata=feature_ds.metadata.iloc[positions],
+    )
+
+
 def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
-    from spcl import evaluation
+    # byte-identical to the repo-root evaluation.py -- one copy (Todo.md C2)
+    import evaluation
     import copy
     import json
     from wildlife_datasets.metrics import BAKS, BAUS
@@ -1518,17 +1535,32 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         "ROC AUC": [],
     }
     step = 0.01
-    ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
+    # O7: this loop used to sweep 103 thresholds, but only two are ever read back:
+    # baks[-inf], baks[0.7] and baus[0.7]. The other 101 BAKS/BAUS evaluations were
+    # computed and discarded, and the dicts are never serialised. Profiled at 19m06s
+    # per 50-epoch AL run (6 evals x ~3m); evaluating just the two needed thresholds
+    # is output-identical and ~50x cheaper. Set HITL_FULL_THRESHOLD_SWEEP=1 to restore
+    # the full curve if it is ever wanted for a plot.
+    if os.environ.get("HITL_FULL_THRESHOLD_SWEEP", "").lower() in ("1", "true", "yes"):
+        ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
+    else:
+        ts = [-np.inf, 0.7]
     new_individual = "new_individual"
 
     # run on each dataset
     if dataset.subset != "WII":
         # also get micro-averaged results
-        default_closed_query_features = megadescriptor_extractor(
-            dataset.default_closed_query
-        )
         default_query_features = megadescriptor_extractor(dataset.default_query)
         default_gallery_features = megadescriptor_extractor(dataset.default_gallery)
+        # O2: closed query is a row subset of query -- slice, do not re-encode.
+        _closed_pos = dataset.default_query.metadata.index[
+            dataset.default_query.metadata["identity"].isin(
+                dataset.default_closed_query.metadata["identity"].unique()
+            )
+        ].values
+        default_closed_query_features = _subset_features(
+            default_query_features, _closed_pos, dataset.default_closed_query.metadata
+        )
 
         idx_train = dataset.default_gallery.metadata.index.values
         idx_test = dataset.default_query.metadata.index.values
@@ -1612,6 +1644,12 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         with open(os.path.join(folder, f"micro_metrics_{epoch+1}.json"), "w") as fp:
             json.dump(micro_results, fp)
 
+        # keep the global extractions for the per-dataset loop below (O6)
+        _global_query_features = default_query_features
+        _global_gallery_features = default_gallery_features
+        _global_closed_features = default_closed_query_features
+        _global_closed_meta = dataset.default_closed_query.metadata
+
         for dataset_name in dataset.csv["dataset"].unique():
             # print("Extracting features for default closed query...")
             # filter dataset
@@ -1623,8 +1661,13 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
                 root=dataset.image_root,
                 transform=dataset.test_transform,
             )
-            default_closed_query_features = megadescriptor_extractor(
-                dataset_filtered_closed_query
+            # O6: slice the global extraction instead of re-encoding this subset.
+            default_closed_query_features = _subset_features(
+                _global_closed_features,
+                _global_closed_meta.index[
+                    _global_closed_meta["dataset"] == dataset_name
+                ].values,
+                filtered_closed_query,
             )
             # print("Extracting features for default query...")
             filtered_query = dataset.default_query.metadata.query(
@@ -1635,7 +1678,9 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
                 root=dataset.image_root,
                 transform=dataset.test_transform,
             )
-            default_query_features = megadescriptor_extractor(dataset_filtered_query)
+            default_query_features = _subset_features(
+                _global_query_features, filtered_query.index.values, filtered_query
+            )
             # print("Extracting features for default gallery...")
             filtered_gallery = dataset.default_gallery.metadata.query(
                 "dataset == @dataset_name"
@@ -1645,8 +1690,8 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
                 root=dataset.image_root,
                 transform=dataset.test_transform,
             )
-            default_gallery_features = megadescriptor_extractor(
-                dataset_filtered_gallery
+            default_gallery_features = _subset_features(
+                _global_gallery_features, filtered_gallery.index.values, filtered_gallery
             )
 
             idx_train = dataset_filtered_gallery.metadata.index.values
@@ -1744,7 +1789,16 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
     else:
         step = 0.01
-        ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
+        # O7: this loop used to sweep 103 thresholds, but only two are ever read back:
+        # baks[-inf], baks[0.7] and baus[0.7]. The other 101 BAKS/BAUS evaluations were
+        # computed and discarded, and the dicts are never serialised. Profiled at 19m06s
+        # per 50-epoch AL run (6 evals x ~3m); evaluating just the two needed thresholds
+        # is output-identical and ~50x cheaper. Set HITL_FULL_THRESHOLD_SWEEP=1 to restore
+        # the full curve if it is ever wanted for a plot.
+        if os.environ.get("HITL_FULL_THRESHOLD_SWEEP", "").lower() in ("1", "true", "yes"):
+            ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
+        else:
+            ts = [-np.inf, 0.7]
         new_individual = "new_individual"
         new_individual = -1
 

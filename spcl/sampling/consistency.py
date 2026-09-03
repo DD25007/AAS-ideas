@@ -250,8 +250,9 @@ class ConsistencySampling(BaseSampling):
                     # prob[mixed_pairs] = log_softmax(prob[mixed_pairs])
 
                 if np.any(np.isnan(prob)):
-                    print("NaN found in probabilities")
-                    import pdb; pdb.set_trace()
+                    raise FloatingPointError(
+                        "NaN in AAS pair probabilities; sampling would be corrupt"
+                    )
                 sampling_pool["probs"].append(prob)
 
             # Stack all the non-redundant, most-informative inconsistent pairs from all S_k's to form the sampling pool
@@ -352,9 +353,8 @@ class ConsistencySampling(BaseSampling):
                     p_y.extend(
                         sampling_pool["priors"][i] * sampling_pool["numerators"][i] / denominator * sampling_pool["probs"][i]
                     )
-                except:
-                    print("Error in computing p_y")
-                    import pdb; pdb.set_trace()
+                except Exception as e:
+                    raise RuntimeError(f"AAS: failed computing p_y: {e}") from e
                 
 
                 # p_y.extend((np.log(sampling_pool["priors"][i]) + sampling_pool["probs"][i] + np.log(sampling_pool["numerators"][i] / denominator)).tolist())
@@ -376,9 +376,8 @@ class ConsistencySampling(BaseSampling):
 
             try:
                 idx_same = np.random.choice(len(all_pairs), min(self.n, len(np.where(all_probs > 0)[0])), p=all_probs, replace=False)
-            except:
-                print("Error in sampling pairs")
-                import pdb; pdb.set_trace()
+            except Exception as e:
+                raise RuntimeError(f"AAS: failed sampling pairs: {e}") from e
             random_selected_pairs = all_pairs[idx_same]
             # random_selected_pairs = np.vstack([random_selected_pairs, cross_pairs[np.random.choice(range(cross_pairs.shape[0]), int(count_cross), p=p_cross, replace=False)]])
 
@@ -422,6 +421,7 @@ class ConsistencySampling(BaseSampling):
             print("KeyboardInterrupt caught. Exiting...")
             return self.ml_pairs, self.cl_pairs
         except Exception as e:
-            print(f"Exception caught: {e}")
-            import pdb; pdb.set_trace()
-            # return self.ml_pairs, self.cl_pairs
+            # Previously dropped into pdb, which hangs an unattended run while AAS
+            # silently contributes zero constraints -- exactly how the finch-clust
+            # version mismatch stayed invisible for a whole grid (Todo.md item 1).
+            raise RuntimeError(f"AAS sampling failed: {e}") from e

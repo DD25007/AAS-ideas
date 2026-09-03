@@ -304,7 +304,17 @@ can be deleted or given the missing file; it affects nothing either way.
 
 Found while running the 16-run grid (2026-08-27). Ordered by impact.
 
-## O1. `num_workers=0` in the AL eval path — BIGGEST WIN
+## ~~O1. `num_workers=0` in the AL eval path~~ — DONE 2026-09-01
+
+> **Fixed.** Both `DeepFeatures` calls in `train_al.py` now pass `num_workers=args.workers`
+> (the `-j` the launcher already sets to 6). Gallery construction in
+> `spcl/datasets/wildlife.py` was already on 8 — only the eval path was starved.
+>
+> **Numerics-neutral, verified three ways:** `wildlife_tools` builds its loader with
+> `shuffle=False` (`data/cache.py:53`); features are concatenated in batch order; and the
+> eval datasets use `test_transform` (Resize/ToTensor/Normalize — no randomness), so
+> worker seeding cannot bite. `train_transform`, which does randomise, is confined to
+> `get_train_loader` and never reaches an extractor.
 
 `SpCL/examples/al_spcl_train_usl.py:427` and `:463`:
 
@@ -325,7 +335,10 @@ non-AL sibling script `SpCL/examples/spcl_train_usl.py:157,263` uses the same ca
 
 **Fix:** use `num_workers=args.workers` (the script already has `-j/--workers`).
 
-## O2. Query features extracted twice per eval
+## ~~O2. Query features extracted twice per eval~~ — DONE 2026-09-01
+
+> Fixed as part of O6 below: closed query is sliced out of the query features instead of
+> being re-encoded. Measured 1m23s of every eval.
 
 `SpCL/spcl/utils/wildlife_utils.py:1384-1386`:
 
@@ -343,7 +356,10 @@ encoded twice on every eval.
 **Fix:** extract `default_query` once and index the closed-query rows out of it by
 metadata index. Cuts roughly 22% off each eval pass. Combine with O1.
 
-## O3. BLAS/OpenMP thread oversubscription
+## ~~O3. BLAS/OpenMP thread oversubscription~~ — DONE 2026-09-01
+
+> `scripts/common.sh` exports `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=8` for every launcher,
+> with the load-715 measurement kept as the comment explaining why.
 
 `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS` are unset, so every process
 sizes its thread pools to all **224** cores. Measured with 16 concurrent runs: hottest
@@ -355,7 +371,18 @@ Worst during Jaccard distance and DBSCAN-on-precomputed over the 20,565^2 matrix
 launcher. Note this is *not* fixed by reducing processes per GPU — 8 processes x 347
 threads still thrashes.
 
-## O4. Gallery construction re-runs MegaDescriptor on every process start
+## ~~O4. Gallery construction re-runs MegaDescriptor on every process start~~ — DONE 2026-09-01
+
+> `gallery_cache.py` caches the chosen row positions, keyed on subset, split seed,
+> images-per-id, metric, model name, a hash of the train paths and the labelled-identity
+> set — so changed data misses rather than reusing a stale selection. Only positions are
+> stored; the frames are rebuilt from them. Writes are atomic (`os.replace`) so concurrent
+> runs cannot read a half-written entry, and any read error is treated as a miss.
+>
+> **Verified**: a cold run (populating) and a warm run (hitting) produce **byte-identical**
+> `evaluation_metrics_0.json`. Saves 4m32s per process start.
+>
+> Disable with `HITL_NO_GALLERY_CACHE=1`; relocate with `HITL_GALLERY_CACHE=<dir>`.
 
 `SpCL/spcl/datasets/wildlife.py:174` loads MegaDescriptor-L-224 and runs feature
 extraction over the train split in `Wildlife.__init__`, purely to pick <=5 exemplars per
@@ -372,7 +399,250 @@ Note: this is *not* re-run at each eval in `al_spcl_train_usl.py` — that scrip
 **is** re-run per eval in RTMem's script, which constructs a fresh `WildlifeDatasets(...)`
 at lines 325 and 353.
 
-## O5. Hardcoded `device='cuda:0'` in eval
+## ~~O6. Every evaluation image was encoded twice (closed query, four times)~~ — NEW, DONE 2026-09-01
+
+Found by profiling rather than reading: the per-dataset loop in `get_evaluation_results`
+rebuilds `filtered_closed_query` / `filtered_query` / `filtered_gallery` as
+`dataset == <name>` **row subsets of the three sets encoded immediately above**, then
+re-encodes them. So the whole evaluation set goes through the network twice, and
+closed-query images four times (global closed + global query + per-dataset closed +
+per-dataset query).
+
+Slicing is exact, not approximate: `wildlife_tools` builds its loader with `shuffle=False`
+(`data/cache.py:53`) and `WildlifeDataset.__init__` calls `metadata.reset_index(drop=True)`,
+so feature row *i* is metadata row *i* and `.metadata.index` **is** the positional index.
+
+Fixed with a `_subset_features` helper in both `utils.py` and `spcl/utils/wildlife_utils.py`.
+It **checks rather than trusts**: the slice's `path` and `identity` columns are compared
+against the frame the old code would have encoded, and it raises if they ever disagree.
+
+### Measured, one eval-only run
+
+| | passes | extraction | images |
+|---|---|---|---|
+| baseline | 43 | 12m21s | 71,680 |
+| + O2/O6 | 3 | 6m42s | 45,504 |
+| + O4 (warm cache) | **2** | **2m04s** | **16,288** |
+
+**83% off feature extraction.**
+
+### The one caveat, measured not assumed
+
+Published figures are **identical at 2dp**, but two raw values move: mINP +0.0013,
+AUC ROC -0.0024. This is not a logic change. The same images through the same model with
+different batch boundaries give features differing by ~5e-07 — GPU reduction order — even
+with `cudnn.benchmark = False`:
+
+```
+full  = cat([m(x[0:32]), m(x[32:64]), m(x[64:96])])
+split = cat([m(x[0:20]), m(x[20:52]), m(x[52:96])])
+max |delta| = 5.364e-07 ; bitwise identical: False
+```
+
+So the old per-dataset numbers came from a different forward pass than the global ones.
+The shift is ~100x below seed noise (+/-0.21-0.52) and 20x below the last printed digit,
+but it is not bit-zero, so a `tol=0.0` gate flags it.
+
+**If bit-exactness on the macro numbers is wanted instead**, invert the design: extract
+per-dataset (preserving the old batch boundaries, so macro is bit-identical) and assemble
+the global features from those slices, moving the ~1e-6 shift onto the *micro* metrics —
+which are explicitly "not what Table 1 reports". Same saving, different row bears the noise.
+
+## R9. Dead-code and unused-file sweep, 2026-09-01
+
+Driven by a reachability trace from the four real entry points (`main.py`, `train_al.py`,
+`aggregate_results.py`, `visualization.py`), then verified file by file — the trace alone
+has false positives on star imports, relative imports and package re-exports.
+
+**Files removed** (all recoverable from git):
+
+| file | why |
+|---|---|
+| `wildlife-eval.py` | referenced `root_features`, which is assigned **nowhere in the repo** — a guaranteed `NameError` at line 42. Never ran. |
+| `clustering_logs.py` | zero importers; the only mention was a commented-out call in `main.py`, removed with it |
+| `spcl/evaluation.py` | **byte-identical** to the repo-root `evaluation.py` (279 lines); importers repointed |
+| `spcl/datasets/wildlife.py::WildlifeDatasets` | 196-line dead class — `main.py` uses the repo-root one and `train_al.py`'s import of this one was dropped as unused |
+
+**Dead code removed inside live files:**
+
+- `sampling/consistency.py`: **221 unreachable lines** sitting after an unconditional
+  `return` in `ConsistencySampling.select`. They referenced `all_outliers`, whose only
+  assignment was itself commented out — the block could never have executed.
+- 24 leftover `# import pdb;` / `# pdb.set_trace()` comment lines from the C7 pass.
+
+**Three real defects in `train_al.py`** (the two the IDE flagged, plus one they led to):
+
+1. `MinMax` used at line 190 but **never imported** — `NameError`.
+2. `ExploreConsolidate` used at line 192 but **never imported** — `NameError`.
+3. Importing them would not have helped: the only implementations (`sampling/assc.py`) take
+   `(database, n, gallery_size)`, not `args=`, so they would have raised the item-12
+   `TypeError` instead. Both branches removed — they are not paper baselines.
+4. Found while fixing those: the dispatch's `else: sampler = None` meant **a typo in `-s`
+   silently ran plain USL** and wrote it into a directory named for an AL method. Now
+   raises with the valid choices.
+
+**One latent `NameError` fixed:** `spcl/utils/wildlife_utils.py:145` called
+`compute_jaccard_distance` without importing it (the repo-root twin defines it in-file;
+this copy simply lacks it). Imported lazily inside the function so module import order is
+unchanged — today's `LD_LIBRARY_PATH` finding is a reminder that import order matters here.
+
+**Kept, deliberately:** `main_train_acc.py`. It looks like a stale fork of `main.py` and is
+unreachable, but it carries 69 identifiers that exist nowhere else — a whole closed-set /
+per-K evaluation block (`closed_mAP`, `AP_by_K`, `INP_by_K`, `Ks`). Deleting it would lose
+that analysis, so it needs a decision rather than a sweep.
+
+**Verification:** a repo-wide undefined-name scan now reports **zero** real defects (the
+three remaining hits are star-import false positives, and all ten names in `main.py` were
+confirmed to resolve at runtime). Every tracked `.py` compiles; `aggregate_results.py`
+still reproduces the frozen tables at `tol=0.0`.
+
+## R10. Deprecated APIs swept, 2026-09-02
+
+Static scan of the whole codebase for removed/deprecated Python and library APIs, each fix
+proven equivalent before applying.
+
+**Fixed — two of these were hard breaks, not warnings:**
+
+| what | where | status |
+|---|---|---|
+| `np.bool` | `spcl/evaluation_metrics/ranking.py:11` | **already an `AttributeError`** under the installed numpy 1.26.4 (removed in 1.24). Any code path reaching it crashed. -> `bool` |
+| `random.sample(<set>, k)` | `sampling/random.py` x2, `spcl/sampling/random.py` x2, `evaluation.py` x1 | deprecated in 3.9, **`TypeError` in 3.11+**. CPython already does `population = tuple(population)` internally, so passing the tuple explicitly is byte-identical -- verified under a fixed seed. -> `random.sample(tuple(...), k)` |
+| `TypedStorage` (`x.storage().data_ptr() + x.storage_offset()*itemsize`) | `faiss_utils.py:11,19` | that expression *is* `x.data_ptr()`; verified equal for contiguous and offset tensors. -> `x.data_ptr()` |
+
+**Not deprecated after all:** `create_model(..., pretrained=True)` at `utils.py:915` and
+`spcl/utils/wildlife_utils.py:1024` is **timm**, which still supports `pretrained=`. Only
+torchvision deprecated it. Item 5 conflated the two.
+
+### `faiss.bruteForceKnn` -> `bfKnn` — DO NOT migrate naively (analysed, deferred)
+
+`faiss_utils.py:88`. Deprecated, and it prints on every call (~176 times per run), but the
+two APIs are **not** interchangeable and a rename would silently corrupt clustering.
+
+Measured on 2000x128 vs 500x128, k=20:
+
+```
+indices   bitwise identical : True
+distances bitwise identical : False
+D1 (bruteForceKnn) row0[:5] : 36.56, 52.58, 53.37, 54.63, 56.67
+D2 (bfKnn)         row0[:5] : 138.96, 154.98, 155.77, 157.03, 159.07
+```
+
+The difference is a **constant per-row offset** (102.40 for row 0) -- `bfKnn` omits the
+`||query||^2` term. Ranking is therefore unaffected, which is why the indices match, but
+`compute_jaccard_distance` compares distances *across* rows to build the k-reciprocal
+neighbourhoods, so dropping that term would change the pseudo-labels and every metric
+downstream.
+
+A correct migration must add `||xq||^2` back per row (and re-verify bitwise against the
+legacy call). Signature for reference: `bfKnn(res, args)` with a `GpuDistanceParams`
+carrying `metric, k, dims, vectors, vectorsRowMajor, numVectors, queries,
+queriesRowMajor, numQueries, outDistances, outIndices`. Left as-is: it is a printed
+warning with no functional impact, and this sits directly on the clustering path.
+
+## R11. Full comparison against the published Table 1, 2026-09-03
+
+`aggregate_results.py --paper` now carries the paper's Table 1 (all 8 metrics, p.39188) and
+diffs every reproduced row against it. Previously only a hand-copied "paper mAP" column in
+the README tracked this, and only for mAP.
+
+### The ~1-point deficit is real, and it is confined to mAP and mINP
+
+Frozen reproduction, AL block, delta vs paper:
+
+| row | mAP | mINP | BAKS | AUC ROC | Top-1 | Top-3 |
+|---|---|---|---|---|---|---|
+| SpCL (Base) | −1.00 | −0.91 | **+0.23** | **+0.56** | −0.54 | −0.63 |
+| + Random | −1.40 | −1.30 | −0.44 | −0.23 | −1.08 | −0.84 |
+| + GBAS | −0.81 | −0.70 | −0.87 | −1.39 | −0.48 | **+0.75** |
+| + LBAS | −1.01 | −1.12 | −1.00 | −0.35 | −0.09 | **+0.05** |
+| + NIS | −1.88 | −1.66 | −0.98 | −1.45 | −0.77 | −1.40 |
+| + AAS | −0.36 | −1.06 | **+1.26** | **+0.33** | **+0.77** | **+1.45** |
+
+mAP and mINP are down ~1 on every row; BAKS, AUC ROC and Top-k are mixed and often
+*above* the paper. That is diagnostic rather than cosmetic: **mAP and mINP integrate over
+the whole ranked list, while Top-k and BAKS only see its head.** Ranking the correct match
+slightly deeper — but still inside the top-k — costs mAP/mINP and leaves Top-k untouched.
+That is the signature of marginally less-converged embeddings, consistent with the
+training-numerics explanation, and inconsistent with an error in the data splits, the
+gallery protocol or the metric code (which would move all eight together).
+
+### New: the skyline's AUC ROC is anomalous in the opposite direction
+
+Every skyline metric **overshoots** the paper (+1.3 to +6.5) except AUC ROC, which
+**undershoots by 3.2–5.5** in both the frozen and the rerun trees. A consistent sign flip
+on one metric is a behavioural difference, not noise.
+
+Mechanistically this fits item 13: our skyline disables `CustomTrainer`'s per-epoch
+re-clustering and trains purely supervised on ground-truth labels. That should sharpen
+closed-set discrimination (Top-1 +5.0) while degrading the known-vs-unknown separation
+AUC ROC measures — exactly the pattern observed. It is further evidence the skyline
+configuration is not the paper's, and it gives item 13 a concrete signal to fix against.
+
+### Rerun (optimised code) vs paper — complete rows only
+
+| row | frozen delta | rerun delta |
+|---|---|---|
+| SpCL (Base) | −1.00 | **−0.71** |
+| + GBAS | −0.81 | **−0.24** |
+| + Random | −1.40 | **−2.52** |
+
+Base and GBAS land *closer* to the paper than the original reproduction; Random moves
+further away. With AL run-to-run nondeterminism at ~1 mAP (R6) this is within the expected
+envelope, but Random remains the watch item from R6/R8.
+
+## ~~O7. The BAKS/BAUS threshold sweep~~ — DONE 2026-09-03
+
+> **101 of the 103 threshold evaluations were dead work.** Every consumer reads only
+> `baks[-inf]`, `baks[0.7]` and `baus[0.7]`; the dicts are never serialised. So this was
+> not a vectorisation problem -- the loop computed 101 BAKS/BAUS results and discarded
+> them. Now gated to the two needed thresholds, with `HITL_FULL_THRESHOLD_SWEEP=1` to
+> restore the full curve for plotting.
+>
+> **Measured: 3m22s -> 0m00s** on an eval-only run (19m06s per 50-epoch AL run, 6 evals).
+> Output-identical: the parity deltas after O7 are the same to 6 decimal places as before
+> it (mAP +0.000008, mINP +0.001336, AUC ROC -0.002383 -- all the pre-existing O2/O6
+> batching effect), i.e. O7 and O4 each contribute exactly zero.
+>
+> Applied in both `utils.py` and `spcl/utils/wildlife_utils.py`, at both gate sites each.
+
+## ~~O8. 10,305 GPU->CPU syncs per `compute_jaccard_distance`~~ — NEW, DONE 2026-09-03
+
+> Found by profiling a complete 6h AL run rather than reading the code. `.cpu()` was called
+> once per row inside the V-matrix loop -- **17.3s of a 44.7s call at N=10304**, pure launch
+> latency, since each transfer is only tens of floats.
+>
+> Batching the transfers in chunks of 512 (`torch.cat` then one `.cpu()`) changes no
+> arithmetic, only when the copy happens:
+>
+> ```
+> N=10304   HEAD 44.9s  ->  patched 32.0s   (1.40x)
+> bitwise identical jaccard matrix: True   (np.array_equal, full scale)
+> V-matrix loop alone: 32.4s -> 17.2s (1.88x)
+> ```
+>
+> Called 50x per AL run (once per epoch): **10.7 min/run, ~4.3 GPU-hours across 24 runs.**
+
+## Where an AL run's time actually goes (profiled, USL s1, 6h00m total)
+
+| phase | time | share | status |
+|---|---|---|---|
+| training (50 ep x 400 iters) | 3.9 h | 65% | GPU-bound (data wait 2%); untouched |
+| jaccard + clustering, x50 | ~1.5 h | 25% | **O8** cuts ~10.7 min |
+| threshold sweep, 6 evals | 19 min | 5% | **O7** cuts ~19 min |
+| eval extraction, 6 evals | 14 min | 4% | **O1/O2/O4/O6** cut ~12 min |
+
+Cumulative eval cost per run: **15m29s -> 1m26s (10.8x)**. Training now dominates almost
+everything that remains, and it is genuinely GPU-bound -- the DataLoader reports 0.034s of
+data wait against 1.707s of step time (2%), so more workers or faster I/O would buy
+nothing. Reducing it further means AMP, a larger batch or `torch.compile`, all of which
+change numerics and would need their own parity argument.
+
+## O5. Hardcoded `device='cuda:0'` in eval — WON'T FIX (harmless under the launchers)
+
+> Every launcher sets `CUDA_VISIBLE_DEVICES=$GPU`, so `cuda:0` always resolves to the
+> one GPU the process can see. It would only matter for a run that hand-picks a device
+> without that env var, which nothing here does. Left alone rather than churn the
+> numerics path for no behavioural gain.
 
 `al_spcl_train_usl.py:427,463`. Correct under `CUDA_VISIBLE_DEVICES=N` (device 0 is the
 assigned GPU), but breaks any multi-GPU or explicit-device usage. Prefer the same device
@@ -382,13 +652,20 @@ the model is already on.
 
 # Cleanup
 
-## C1. Dead file: `dataset/person.py`
+## ~~C1. Dead file: `dataset/person.py`~~ — DONE 2026-09-01
+
+> **Deleted.** No importers, and its own `from random_erasing import RandomErasing` was
+> dangling — the module could not even be loaded.
 
 Covered in detail above — dangling `from random_erasing import RandomErasing`, imported
 by nothing, copied from CoinCheung/triplet-reid-pytorch. Delete it, or add the missing
 `random_erasing.py`. Nothing in the training path uses it.
 
-## C2. `faiss_utils.py` is a byte-for-byte duplicate
+## ~~C2. `faiss_utils.py` is a byte-for-byte duplicate~~ — DONE 2026-09-01
+
+> **Deduplicated.** `spcl/utils/faiss_utils.py` deleted; `spcl/utils/faiss_rerank.py` now
+> imports the repo-root `faiss_utils.py`. The two files were byte-identical, so this is
+> numerics-neutral by construction.
 
 Root `faiss_utils.py` (107 lines) and `SpCL/spcl/utils/faiss_utils.py` (108 lines) are
 identical apart from a trailing newline. Keep one and import it.
@@ -405,7 +682,12 @@ only **134 lines differ**, and **17 of 19** top-level functions share names —
 Two copies of the NP3 constrained-clustering implementation and the whole metric suite
 means a bug fixed in one silently persists in the other. Consolidate into one module.
 
-## C4. `sampling/` is duplicated between root and SpCL
+## C4. `sampling/` is duplicated between root and SpCL — PARTIALLY DONE 2026-09-01
+
+> **The danger is gone, the duplication is not.** The SpCL copy is now `spcl/sampling/`,
+> so neither package can shadow the other (item 12). Both copies still exist and still
+> diverge; merging them is still open. The policy quoted below (keep `SpCL/` pristine)
+> was **superseded** on 2026-09-01 — see R3.
 
 Normalized differing lines (root vs `SpCL/sampling/`):
 
@@ -449,7 +731,10 @@ This changes the shape of the fix for C2/C3/C4. Instead of merging, the directio
    parameter our launcher supplies, rather than an edit in place. Left as-is for now
    because nothing can run without it.
 
-## C5. Mixed line endings
+## ~~C5. Mixed line endings~~ — DONE 2026-09-01
+
+> **Normalised.** 18 tracked files converted CRLF -> LF and a `.gitattributes` added
+> (`* text=auto eol=lf`). All `.py` still compile. Cross-tree diffs are now readable.
 
 ### What "line endings" means
 
@@ -500,7 +785,21 @@ Then re-normalize the working tree once (`dos2unix`, or
 `git add --renormalize .`). Worth doing **before** any C2/C3/C4 refactor — otherwise every
 comparison between the root and SpCL trees is misleading.
 
-## C6. Standalone scripts not on any code path
+## C6. Standalone scripts not on any code path — PARTIALLY DONE 2026-09-01
+
+> **The three plotting scripts are merged into `visualization.py` and deleted.**
+> Not a faithful merge, and deliberately so: all three read a `logs_*.json` /
+> `mean_accuracy_*.json` schema that only `main.py --sampler` emits — a workflow this
+> reproduction never used. Zero files of that schema exist anywhere in the 23 GB of
+> results, so a faithful merge would have produced a module that plots nothing.
+> `visualization.py` reads the schema the runs actually emit and imports
+> `aggregate_results.py`'s loaders, so figures and README tables cannot drift apart.
+>
+> It has the shape C6 asked for: one shared loader, one function per figure kind, an
+> argparse entry point (so nothing runs at import — two of the three used to), and each
+> figure writes a companion CSV.
+>
+> `main_train_acc.py` and `wildlife-eval.py` are still undecided — see below.
 
 `generate_graph.py` (98), `generate_graphs.py` (121), `generate_plots.py` (150),
 `wildlife-eval.py`, `main_train_acc.py` (719) are imported by nothing.
@@ -536,7 +835,10 @@ Remaining two, not part of the merge:
 - `wildlife-eval.py` cannot run as-is — `root_features` is never assigned anywhere in the
   repo (see item 7 above). Either wire it up or drop it.
 
-## C7. `pdb.set_trace()` traps in production paths
+## ~~C7. `pdb.set_trace()` traps in production paths~~ — DONE 2026-09-01
+
+> **All live traps removed.** No `pdb.set_trace()` remains on any code path; the only
+> occurrences left are already-commented-out lines. Detail in R7.
 
 Already listed above. Every one sits in an `except` whose intended return is commented
 out directly beneath, so any exception hangs an unattended run instead of failing or
@@ -714,7 +1016,11 @@ uses the model after it.
 
 ---
 
-## 12. Two `sampling` packages shadow each other — BLOCKING (PATCHED)
+## ~~12. Two `sampling` packages shadow each other~~ — DONE 2026-09-01
+
+> **Closed structurally.** `SpCL/sampling/` became `spcl/sampling/`, so there is no second
+> importable `sampling` package to shadow. The `cd SpCL` + `PYTHONPATH` workaround is gone.
+> See R3.
 
 A demonstrated instance of C4, not a theoretical one. `sampling/` exists **both** at the
 repo root and under `SpCL/`, and the classes are *not* interchangeable:
@@ -1157,3 +1463,106 @@ Consequences:
 - Worth fixing on its own merits: drop `benchmark = True`, add `torch.cuda.manual_seed_all`,
   and seed the DataLoader workers. Expect a throughput cost from losing cuDNN autotuning,
   which is presumably why it was set.
+
+### Measured, 2026-09-01 — the nondeterminism is present before the first gradient step
+
+An AAS seed-1 run under the restructured tree came out 1.01 mAP above the frozen run at the
+epoch-10 eval (and −1.38 AUC ROC), which looked like a refactor regression. It is not.
+
+Clustering statistics diverge at **epoch 0**, which runs on the freshly-loaded pretrained
+model before any training. Two *identical* runs of the *same* code, same `--seed 1`, on
+different GPUs:
+
+| run | clusters @ epoch 0 | un-clustered | R_indep |
+|---|---|---|---|
+| frozen (pre-restructure) | 2300 | 4323 | 0.3684 |
+| verify (post-restructure) | 2281 | 4341 | 0.3684 |
+| probe A (post-restructure) | 2287 | 4327 | 0.3684 |
+| probe B (post-restructure) | 2281 | 4353 | **0.3182** |
+
+A vs B differ by as much as frozen vs verify — all four inside a ~19-cluster band, and probe
+B even selected a different `R_indep` threshold. Last-bit float differences in the first
+feature extraction shift DBSCAN/jaccard cluster boundaries, and a clustering-driven method
+has no mechanism to wash that out; it compounds through the pseudo-labels every epoch.
+
+**Consequences, and they are not small:**
+
+1. **An AL row cannot be parity-checked by re-running it.** Not at 10 epochs, not at 50, not
+   with more seeds — the run does not reproduce against *itself*. For AL code the only real
+   guarantee is a byte-diff of the source (the Tier 1 check in R3).
+2. Any future claim that a change "did not move the AL numbers" has to rest on the byte-diff
+   or on a fixed evaluation of fixed checkpoints — never on a re-run comparison.
+3. The eval-only rows are unaffected: pure inference, and they reproduce **exactly**
+   (verified, zero delta on all 8 metrics x 4 seeds x 2 rows).
+4. It also caps what the published +/-0.30-0.70 seed std actually measures — that is seed
+   variation *plus* this, not seed variation alone.
+
+---
+
+## R7. Cleanup pass, 2026-09-01 — C1, C2, C5, C7 closed
+
+All four are **numerics-neutral by construction**, which is why they went first.
+
+**C7 — every live `pdb.set_trace()` removed.** Todo called this the highest-priority cleanup,
+and correctly: each trap sat in a handler that swallowed the exception, so any fault dropped
+an unattended run into a `(Pdb)` prompt and hung it forever instead of failing. That is how
+the finch-clust mismatch stayed invisible across a whole grid (item 1).
+
+| file | sites | fix |
+|---|---|---|
+| `spcl/sampling/consistency.py` (AAS) | 4 | `raise` — a NaN-probability guard, two bare `except:` swallows, and the catch-all that hid item 1 |
+| `utils.py` | 4 | deleted — the `assert` on the following line already states the check |
+| `spcl/utils/wildlife_utils.py` | 4 | same, its black-formatted twin |
+| `clustering_logs.py` | 1 | deleted — an unconditional breakpoint sitting mid-plot |
+| `sampling/fps.py` | 1 | `raise` — for/else fallthrough |
+
+Safe by construction: a `set_trace()` cannot be traversed by a healthy unattended run — it
+blocks — so no run that produced a published number ever passed through one. Removing them
+cannot move a metric; it only converts a hang into a fast, legible failure.
+
+**C1** — `dataset/person.py` deleted. No importers, and its own
+`from random_erasing import RandomErasing` was dangling (no such module anywhere), so the
+file could not be imported at all.
+
+**C2** — `spcl/utils/faiss_utils.py` deleted; `faiss_rerank.py` imports the repo-root copy.
+The two were byte-identical.
+
+**C5** — 18 tracked files normalised CRLF -> LF, `.gitattributes` added. This is what made
+`utils.py` vs its SpCL twin report 3,374 differing lines when the truth was 134.
+
+Still open from the cleanup block: **C3** (merge `wildlife_utils.py` into `utils.py`),
+**C4** (merge the two `sampling` packages — the *shadowing* is fixed, the duplication is not).
+
+---
+
+## R8. `aggregate_results.py --compare` had three defects — the gate was not trustworthy
+
+Found by chasing a false alarm, which is the only reason they surfaced. A verification tool
+that can report a failure that is not real can equally hide one that is, so these matter more
+than the cleanups above.
+
+**1. It compared across different seed sets.** A 1-seed spot check of `resnet50_baseline`
+against the 4-seed frozen baseline reported a 1.36 BAKS "regression". There was none: seed 0
+is 38.51 mAP and the 4-seed mean is 38.23, so the tool was measuring seed spread and calling
+it a code change. Six runs — frozen, two at HEAD, one at the pre-import-removal commit, and
+two earlier — all produced byte-identical numbers.
+
+**2. It compared across different training lengths.** The AL loader fell back to "latest
+available epoch", so the Tier 3 10-epoch smoke run was silently diffed against the frozen
+50-epoch run: an 11.3-point "regression" that was epoch 12 vs epoch 52.
+
+**3. Its seed glob matched archived attempts.** `s*` caught a `s3.failed131739` directory and
+`int("3.failed131739")` would have crashed the run.
+
+All three are fixed: comparison restricts to the seed intersection and says when it does, an
+epoch mismatch is **skipped with a reason** rather than compared, and the glob is `s\d+`.
+
+**What this cost, and the lesson.** Two of these produced confident, wrong failure reports
+that I passed on before diagnosing them. The AST evidence had already shown the code was
+untouched; the tool disagreed; the tool was wrong both times. When a gate and a proof
+disagree, the gate is a program and can be buggy too — bisect before believing either.
+
+**What it confirmed.** With the tool fixed, `resnet50_baseline` reproduces **exactly** (delta
+0.0000) at HEAD, at `893db37`, and across two concurrent runs on different GPUs. The import
+removals in `dae61a5` changed nothing numerically, closing the one gap AST equality could not
+cover: **import side effects.**

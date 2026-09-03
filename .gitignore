@@ -1,28 +1,33 @@
-pretrained_models/
-plots/
-plots_selected0/
-wandb/
-.idea/
+# Run outputs. Covers outputs_initial/ (the frozen reproduction baseline) and any
+# outputs_verify*/ tree used for parity checks.
 outputs*/
 
-__pycache__/
-**/__pycache__/
+# Checkpoints and evaluation artefacts, when --out_dir points somewhere other than outputs/.
+pretrained_models/
 
-sweep*.yml
-sweep*.yaml
-
+# Figures written by visualization.py, and the per-run diagnostics/logs main.py
+# and clustering_logs.py emit.
+figures/
 diagnostics/
-
-personx/
-vehiclex/
-
 logs/
-*.egg-info
-vis_log/
-# machine-specific dataset links (absolute paths, never committed)
+wandb/
+
+# Machine-specific dataset link: dataroot/wildlife is an absolute symlink, so it is
+# recreated per machine rather than committed. See scripts/README.md.
 dataroot/
 
-CHANGES_MADE.md
-.vscode/
-# launcher queue state
+# Launcher retry/attempt bookkeeping.
 scripts/.state/
+
+# Setup log from the initial port; superseded by README.md and Todo.md.
+CHANGES_MADE.md
+
+__pycache__/
+.vscode/
+.idea/
+
+# gallery-selection cache (O4); rebuilt on demand
+.cache/
+
+# queue driver logs
+outputs_*_queue.log

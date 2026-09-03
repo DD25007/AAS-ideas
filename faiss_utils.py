@@ -8,7 +8,7 @@ def swig_ptr_from_FloatTensor(x):
     assert x.is_contiguous()
     assert x.dtype == torch.float32
     return faiss.cast_integer_to_float_ptr(
-        x.storage().data_ptr() + x.storage_offset() * 4
+        x.data_ptr()  # == storage().data_ptr() + storage_offset()*itemsize, minus the TypedStorage deprecation
     )
 
 
@@ -16,7 +16,7 @@ def swig_ptr_from_LongTensor(x):
     assert x.is_contiguous()
     assert x.dtype == torch.int64, "dtype=%s" % x.dtype
     return faiss.cast_integer_to_idx_t_ptr(
-        x.storage().data_ptr() + x.storage_offset() * 8
+        x.data_ptr()  # == storage().data_ptr() + storage_offset()*itemsize, minus the TypedStorage deprecation
     )
 
 

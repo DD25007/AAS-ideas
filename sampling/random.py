@@ -16,7 +16,7 @@ class RandomSampling(BaseSampling):
             raise ValueError("Not enough available pairs to sample.")
         print(f"Selecting {self.n} pairs.")
         selected_pairs = set(
-            [frozenset(pair) for pair in random.sample(available_pairs, self.n)]
+            [frozenset(pair) for pair in random.sample(tuple(available_pairs), self.n)]
         )
         self.all_selected_pairs.update(selected_pairs)
 
@@ -73,7 +73,7 @@ class RobustRandomSampling(BaseSampling):
 
         available_pairs = all_inlier_pairs - self.all_selected_pairs
         selected_pairs = set(
-            [frozenset(pair) for pair in random.sample(available_pairs, self.n)]
+            [frozenset(pair) for pair in random.sample(tuple(available_pairs), self.n)]
         )
         self.all_selected_pairs.update(selected_pairs)
 

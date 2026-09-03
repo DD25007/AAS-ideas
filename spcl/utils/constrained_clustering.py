@@ -207,16 +207,12 @@ def constrained_clustering(
         for a, b in ml_pairs:
             if labels[a] != labels[b]:
                 print(f"{a}, {b}, {labels[[a, b]]}")
-                # import pdb;
-                # pdb.set_trace()
             assert (
                 labels[a] == labels[b]
             ), "must-link constraint violated. Implementation error"
         for a, b in cl_pairs:
             if labels[a] == labels[b] and labels[a] != -1:
                 print(f"{a}, {b}, {labels[[a, b]]}")
-                # import pdb;
-                # pdb.set_trace()
             assert (
                 labels[a] != labels[b] or labels[a] == -1
             ), "cannot-link constraint violated. Implementation error"

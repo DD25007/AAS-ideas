@@ -33,10 +33,12 @@ from spcl.utils.faiss_rerank import compute_jaccard_distance
 
 from spcl.sampling.random import RandomSampling
 
-# NOTE: the AL samplers now live in spcl.sampling, renamed from the former SpCL/sampling/
-# so they can no longer be shadowed by the repo-root `sampling` package (Todo.md item 12).
-# The MinMax/ExploreConsolidate/FPS samplers dispatched below exist only in the root
-# `sampling` package, take different constructor signatures, and are not paper baselines.
+# NOTE: the AL samplers live in spcl.sampling, renamed from the former SpCL/sampling/ so
+# they can no longer be shadowed by the repo-root `sampling` package (Todo.md item 12).
+# The MinMax/ExploreConsolidate branches that used to sit in the dispatch below were
+# removed on 2026-09-01: they referenced names this file never imports, and the only
+# implementations in the repo (sampling/assc.py) take (database, n, gallery_size) rather
+# than args=, so they could never have been constructed here. Not paper baselines.
 from spcl.sampling.balanced import LBAS, GBAS
 from spcl.sampling.consistency import ConsistencySampling
 from spcl.sampling.counting_clusters import CountingClusters
@@ -186,10 +188,6 @@ def main_worker(args):
             sample_outliers=False,
             args=args,
         )
-    elif args.sampler == "MinMax":
-        sampler = MinMax(args=args)
-    elif args.sampler == "EC":
-        sampler = ExploreConsolidate(args=args)
     elif args.sampler == "CC":
         sampler = CountingClusters(ratio=1.0, args=args)
     elif args.sampler == "ConSam":
@@ -200,8 +198,15 @@ def main_worker(args):
             num_gt_ids_gallery=np.unique(np.array(dataset.gallery)[:, 1]).shape[0],
             args=args,
         )
-    else:
+    elif args.sampler in (None, "None"):
         sampler = None
+    else:
+        raise ValueError(
+            f"unknown --sampler {args.sampler!r}. Expected one of: "
+            "random, GBAS, LBAS, CC (NIS), ConSam (AAS) -- or omit -s entirely for the "
+            "SpCL USL baseline. Falling through to sampler=None would silently run plain "
+            "USL and write it into a directory named for an AL method."
+        )
 
     gt_labels = None
 
@@ -615,8 +620,14 @@ def main_worker(args):
             if (epoch + 1) % args.eval_step == 0 or (epoch == args.epochs - 1):
                 if args.dataset == "wildlife":
                     model.eval()
+                    # O1: num_workers was 0, so every JPEG decode and resize for the
+                    # ~20,900 eval images ran single-threaded in the main process while
+                    # the GPU idled -- 25-40 s per batch of 32 under load. Evaluation,
+                    # not training, dominated wall-clock. The authors' own non-AL script
+                    # used num_workers=8 here, so 0 was an oversight. shuffle=False in
+                    # wildlife_tools, so this changes throughput only, not batch order.
                     megadescriptor_extractor = DeepFeatures(
-                        model, device="cuda:0", num_workers=0, batch_size=32
+                        model, device="cuda:0", num_workers=args.workers, batch_size=32
                     )
                     model = model.to("cuda:0")
                     folder = osp.join(
@@ -683,8 +694,9 @@ def main_worker(args):
         model.load_state_dict(checkpoint["state_dict"])
         if args.dataset == "wildlife":
             model.eval()
+            # O1: see the comment at the per-cycle eval above.
             megadescriptor_extractor = DeepFeatures(
-                model, device="cuda:0", num_workers=0, batch_size=32
+                model, device="cuda:0", num_workers=args.workers, batch_size=32
             )
             model = model.to("cuda:0")
             folder = osp.join(args.logs_dir, args.dataset, args.subset, "evaluation")

@@ -84,20 +84,20 @@ remaining suspect is training numerics (torch/cuDNN versions differ from the aut
 **Every row below is the mean of 4 gallery splits** (`--sample_seed 0..3`); ± is the
 standard deviation across those splits.
 
-| Row | n | mAP | mINP | BAKS | AUC ROC | Top-1 | Top-5 | paper mAP | Δ mAP |
-|---|---|---|---|---|---|---|---|---|---|
-| ResNet-50 (Baseline) | 4 | **38.23** ±0.52 | 20.46 | 49.64 | 62.49 | 48.94 | 70.92 | 38.88 | **−0.65** |
-| Foundation row (ImageNet Swin-L) | 4 | **44.46** ±0.34 | 25.54 | 57.95 | 64.74 | 56.62 | 76.04 | 45.65 | **−1.19** |
-| Skyline, 30 ep, zerobased | 4 | 65.86 ±0.20 | 49.33 | 75.33 | 74.66 | 75.38 | 89.73 | 64.29 | +1.57 |
-| Skyline, 30 ep, offset | 4 | 65.90 ±0.45 | 49.14 | 75.38 | 75.16 | 75.68 | 89.88 | 64.29 | +1.61 |
-| Skyline, 50 ep, zerobased | 4 | 68.55 ±0.19 | 52.40 | 77.84 | 76.61 | 77.88 | 90.45 | 64.29 | +4.26 |
-| Skyline, 50 ep, offset | 4 | 68.39 ±0.51 | 52.33 | 77.66 | 76.85 | 77.82 | 90.49 | 64.29 | +4.10 |
+| Row                              | n   | mAP             | mINP  | BAKS  | AUC ROC | Top-1 | Top-5 | paper mAP | Δ mAP     |
+| -------------------------------- | --- | --------------- | ----- | ----- | ------- | ----- | ----- | --------- | --------- |
+| ResNet-50 (Baseline)             | 4   | **38.23** ±0.52 | 20.46 | 49.64 | 62.49   | 48.94 | 70.92 | 38.88     | **−0.65** |
+| Foundation row (ImageNet Swin-L) | 4   | **44.46** ±0.34 | 25.54 | 57.95 | 64.74   | 56.62 | 76.04 | 45.65     | **−1.19** |
+| Skyline, 30 ep, zerobased        | 4   | 65.86 ±0.20     | 49.33 | 75.33 | 74.66   | 75.38 | 89.73 | 64.29     | +1.57     |
+| Skyline, 30 ep, offset           | 4   | 65.90 ±0.45     | 49.14 | 75.38 | 75.16   | 75.68 | 89.88 | 64.29     | +1.61     |
+| Skyline, 50 ep, zerobased        | 4   | 68.55 ±0.19     | 52.40 | 77.84 | 76.61   | 77.88 | 90.45 | 64.29     | +4.26     |
+| Skyline, 50 ep, offset           | 4   | 68.39 ±0.51     | 52.33 | 77.66 | 76.85   | 77.82 | 90.49 | 64.29     | +4.10     |
 
 Not a Table 1 row, but measured for comparison:
 
-| Model | n | mAP | mINP | BAKS | AUC ROC | Top-1 | Top-5 |
-|---|---|---|---|---|---|---|---|
-| MegaDescriptor-L-224, real weights | 4 | 53.34 ±0.16 | 32.86 | 67.90 | 68.30 | 67.78 | 85.91 |
+| Model                              | n   | mAP         | mINP  | BAKS  | AUC ROC | Top-1 | Top-5 |
+| ---------------------------------- | --- | ----------- | ----- | ----- | ------- | ----- | ----- |
+| MegaDescriptor-L-224, real weights | 4   | 53.34 ±0.16 | 32.86 | 67.90 | 68.30   | 67.78 | 85.91 |
 
 This row is a **side experiment, not a Table 1 row**: it exists only to confirm that the
 paper's "MegaDescriptor" row is really ImageNet Swin-L. It is also no longer reproducible —
@@ -239,24 +239,24 @@ passed silently and produced non-comparable numbers.
 
 ## Not reproduced
 
-| Table 1 row | why |
-|---|---|
-| **MiewID** (foundation) | Loads via `trust_remote_code`; its modelling code targets transformers 4.x but the env has 5.16.1 → `AttributeError: 'MiewIdNet' object has no attribute 'all_tied_weights_keys'`. Fix is a transformers 4.x pin — `Todo.md` item 14. |
-| **USL block** — ICE, PPLR, ClusterContrast, RTMem, PurificationReID | Never ported to wildlife by the authors. Only RTMem exists in this repo's git history with a wildlife adapter (deleted at `56c6fe6`, recoverable). `Todo.md` has the porting recipe reconstructed from it. |
-| **ResNet-50 (Skyline)** | Runs only via a makeshift workaround; the shipped path cannot train past epoch 1. Numbers above are indicative, not a reproduction — `Todo.md` item 13. |
+| Table 1 row                                                         | why                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **MiewID** (foundation)                                             | Loads via `trust_remote_code`; its modelling code targets transformers 4.x but the env has 5.16.1 → `AttributeError: 'MiewIdNet' object has no attribute 'all_tied_weights_keys'`. Fix is a transformers 4.x pin — `Todo.md` item 14. |
+| **USL block** — ICE, PPLR, ClusterContrast, RTMem, PurificationReID | Never ported to wildlife by the authors. Only RTMem exists in this repo's git history with a wildlife adapter (deleted at `56c6fe6`, recoverable). `Todo.md` has the porting recipe reconstructed from it.                            |
+| **ResNet-50 (Skyline)**                                             | Runs only via a makeshift workaround; the shipped path cannot train past epoch 1. Numbers above are indicative, not a reproduction — `Todo.md` item 13.                                                                               |
 
 ## Local changes made to this repo
 
 All are commented with `FIXME(...)` or `MAKESHIFT(...)` and keep the original lines above
 them. Full reasoning in `Todo.md`.
 
-| File | change | why |
-|---|---|---|
-| `requirements.txt` | pin `finch-clust==0.2.1` | 0.2.2+ silently breaks AAS (item 1) |
-| `train_al.py` | `model.to('cuda:0')` after eval; samplers imported from `spcl.sampling` | wildlife-tools leaves the model on CPU (item 11); the old `sampling` shadowing is now structurally impossible (item 12) |
-| `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat` | corrupts the NIS estimate (W1) |
-| `main.py` | skyline label mode + `extra_classes`; `get_evaluation_results` epoch arg; `run_suffix` entries for ImageNet Swin | items 13a/13b, 16 |
-| `utils.py` | `update_pseudo_labels` flag on `CustomTrainer` | stops per-epoch re-clustering destroying skyline labels (item 13c) |
+| File                                 | change                                                                                                           | why                                                                                                                     |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `requirements.txt`                   | pin `finch-clust==0.2.1`                                                                                         | 0.2.2+ silently breaks AAS (item 1)                                                                                     |
+| `train_al.py`                        | `model.to('cuda:0')` after eval; samplers imported from `spcl.sampling`                                          | wildlife-tools leaves the model on CPU (item 11); the old `sampling` shadowing is now structurally impossible (item 12) |
+| `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat`                                                                              | corrupts the NIS estimate (W1)                                                                                          |
+| `main.py`                            | skyline label mode + `extra_classes`; `get_evaluation_results` epoch arg; `run_suffix` entries for ImageNet Swin | items 13a/13b, 16                                                                                                       |
+| `utils.py`                           | `update_pseudo_labels` flag on `CustomTrainer`                                                                   | stops per-epoch re-clustering destroying skyline labels (item 13c)                                                      |
 
 The `main.py` foundation-row bypass has been **reverted** — the ImageNet-Swin
 substitution it disabled is what the published numbers went through (item 15). The repo is

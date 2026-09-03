@@ -8,7 +8,7 @@ from ..utils import to_numpy
 
 
 def _unique_sample(ids_dict, num):
-    mask = np.zeros(num, dtype=np.bool)
+    mask = np.zeros(num, dtype=bool)
     for _, indices in ids_dict.items():
         i = np.random.choice(indices)
         mask[i] = True

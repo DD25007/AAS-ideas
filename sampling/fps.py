@@ -89,9 +89,9 @@ class FPS(BaseSampling):
                 if len(selected_pairs) == self.n:
                     break
             else:
-                import pdb
-
-                pdb.set_trace()
+                raise RuntimeError(
+                    "FPS: exhausted candidate pairs before filling the budget"
+                )
             # Update pairs_left
             pairs_left = np.delete(pairs_left, selected)
             i += 1

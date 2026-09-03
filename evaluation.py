@@ -161,7 +161,7 @@ def split_protocol(metadata, protocol_type=1, image_per_id=1, num_splits=5, seed
         if open_set_count_target > len(remaining_ids):
             open_set_ids = remaining_ids
         else:
-            open_set_ids = random.sample(remaining_ids, open_set_count_target)
+            open_set_ids = random.sample(tuple(remaining_ids), open_set_count_target)
 
         # Initialize lists of indices for gallery and query.
         gallery_indices = []

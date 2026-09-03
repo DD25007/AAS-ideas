@@ -108,7 +108,6 @@ def run_one_cycle(
             database_subset.metadata["identity"].unique().shape[0],
         )
 
-        # clustering_logs.compute_and_log_pseudo_id_stats(database_subset, database_features, logs, cycle, save_root=f"diagnostics/{args.dataset}/{run_suffix}")
 
         logs.update(
             {

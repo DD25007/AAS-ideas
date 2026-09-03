@@ -1,3 +1,4 @@
+import gallery_cache
 import os
 import numpy as np
 import pandas as pd
@@ -57,8 +58,13 @@ class WildlifeDatasets:
             ).rename(columns={"Entity": "identity", "Image_Name": "path"})
             self.csv = self.train_split.copy()
         else:
+            # low_memory=False: the `date` column mixes date strings with NaN, so
+            # pandas' chunk-wise inference emits a DtypeWarning on every read (Todo.md
+            # W3). Single-pass inference yields a frame that compares .equals() to the
+            # chunked one, and `date` is never read by the pipeline anyway.
             self.csv = pd.read_csv(
-                os.path.join(dataset_path, "wildlifereid-10k", "metadata.csv")
+                os.path.join(dataset_path, "wildlifereid-10k", "metadata.csv"),
+                low_memory=False,
             )
             if dataset != "combined":
                 self.csv = self.csv.query(f'dataset == "{dataset}"')
@@ -162,6 +168,32 @@ class WildlifeDatasets:
         representative_gallery = []
         K = self.images_per_id
 
+        # O4: this selection uses a FIXED MegaDescriptor, not the model being trained, so
+        # for a given (subset, split seed, K, metric) it is a pure function of the
+        # metadata. On a hit we skip a ~29k-image forward pass (68% of the remaining
+        # extraction time). Only the chosen row positions are cached; the frames are
+        # rebuilt from them here.
+        _cache_key = gallery_cache.build_key(
+            subset=self.dataset,
+            split_seed=self.dataset_split_seed,
+            images_per_id=K,
+            metric=self.metric,
+            model_name="hf-hub:BVRA/MegaDescriptor-L-224",
+            train_metadata=self.default_train.metadata,
+            labeled_identities=self.identity_train_labeled,
+        )
+        _cached = gallery_cache.load(_cache_key)
+        if _cached is not None:
+            representative_gallery = self.default_train.metadata.loc[_cached]
+            self.default_train.metadata = self.default_train.metadata.drop(_cached)
+            self.default_gallery = WildlifeDataset(
+                metadata=representative_gallery,
+                root=self.image_root,
+                transform=self.test_transform,
+            )
+            print(f"Gallery selection loaded from cache ({len(_cached)} images).")
+            return representative_gallery
+
         feature_extractor = DeepFeatures(
             model, device=device, num_workers=num_workers, batch_size=batch_size
         )
@@ -187,7 +219,6 @@ class WildlifeDatasets:
                 distances = distance.cdist(
                     identity_features, [centroid], metric=self.metric
                 ).flatten()
-            # import pdb; pdb.set_trace()
             # n_identity_features = len(identity_features)
             # X = np.stack([identity_features, centroid], axis=0)
             # distances = compute_jaccard_distance(X)
@@ -228,6 +259,11 @@ class WildlifeDatasets:
             self.default_train.metadata = self.default_train.metadata.drop(to_remove)
 
         representative_gallery = pd.concat(representative_gallery)
+        gallery_cache.save(
+            _cache_key,
+            representative_gallery.index.values,
+            note=f"{self.dataset} seed={self.dataset_split_seed} K={K} metric={self.metric}",
+        )
 
         self.default_gallery = WildlifeDataset(
             metadata=representative_gallery,

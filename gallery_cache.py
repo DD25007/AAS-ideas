@@ -18,9 +18,12 @@ caller re-derives the frames.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import pickle
+import random as _random
 
 CACHE_DISABLED = os.environ.get("HITL_NO_GALLERY_CACHE", "").lower() in (
     "1",
@@ -55,12 +58,21 @@ def build_key(
     selection made for different data.
     """
     h = hashlib.sha256()
+    # The selection runs MegaDescriptor and numpy float ops, so a library change can
+    # legitimately change it. Without these in the key, an env upgrade would silently be
+    # served a selection computed under the old stack -- which would mask exactly the
+    # difference a parity run is trying to measure.
+    import numpy as _np
+    import torch as _torch
+
     for part in (
         str(subset),
         str(split_seed),
         str(images_per_id),
         str(metric),
         str(model_name),
+        "np" + _np.__version__,
+        "torch" + _torch.__version__,
     ):
         h.update(part.encode())
         h.update(b"\x00")
@@ -72,8 +84,31 @@ def build_key(
     return h.hexdigest()[:32]
 
 
+def _rng_state():
+    """Snapshot the RNGs the selection consumes."""
+    import numpy as np
+
+    return base64.b64encode(
+        pickle.dumps({"numpy": np.random.get_state(), "python": _random.getstate()})
+    ).decode()
+
+
+def _restore_rng(blob):
+    import numpy as np
+
+    st = pickle.loads(base64.b64decode(blob))
+    np.random.set_state(st["numpy"])
+    _random.setstate(st["python"])
+
+
 def load(key):
-    """-> ordered list of positional indices, or None on a miss."""
+    """-> ordered list of positional indices, or None on a miss.
+
+    Also restores the RNG state to where the original selection left it. The compute path
+    consumes `np.random.choice` draws; a hit that just returned early would leave the
+    global RNG somewhere else entirely, and every downstream consumer (notably
+    `RandomSampling`) would diverge. Without this the cache is not transparent.
+    """
     if CACHE_DISABLED:
         return None
     path = os.path.join(_cache_dir(), key + ".json")
@@ -82,10 +117,11 @@ def load(key):
     try:
         with open(path) as fh:
             blob = json.load(fh)
-        if blob.get("key") != key:
-            return None
+        if blob.get("key") != key or "rng_state" not in blob:
+            return None  # entries without an RNG snapshot are treated as misses
+        _restore_rng(blob["rng_state"])
         return blob["gallery_positions"]
-    except (json.JSONDecodeError, KeyError, OSError):
+    except (json.JSONDecodeError, KeyError, OSError, pickle.UnpicklingError, ValueError):
         return None  # a damaged entry is a miss, never a wrong answer
 
 
@@ -101,6 +137,7 @@ def save(key, positions, note=""):
                     "key": key,
                     "note": note,
                     "gallery_positions": [int(i) for i in positions],
+                    "rng_state": _rng_state(),
                 },
                 fh,
             )

@@ -1515,6 +1515,24 @@ def _subset_features(feature_ds, positions, expect_metadata=None):
     )
 
 
+def _json_default(o):
+    """Make numpy scalars/arrays JSON-serialisable.
+
+    Under numpy 1 most of these were `np.float64`, which subclasses Python `float`, so
+    `json.dump` accepted them silently. NEP 50 in numpy 2 keeps `float32` as `float32`
+    (no longer a `float` subclass) and `json.dump` raises
+    "Object of type float32 is not JSON serializable". Converting here keeps the written
+    values identical while removing the dependency on that promotion accident.
+    """
+    import numpy as _np
+
+    if isinstance(o, _np.generic):
+        return o.item()
+    if isinstance(o, _np.ndarray):
+        return o.tolist()
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+
 def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
     # byte-identical to the repo-root evaluation.py -- one copy (Todo.md C2)
     import evaluation
@@ -1611,10 +1629,10 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             baks[t] = BAKS(y_true, y_pred, identity_test_only)
             baus[t] = BAUS(y_true, y_pred, identity_test_only, new_individual)
         roc_score = auc_roc_new_class(y_true_w_new, scores, new_individual)
-        print("Top 1 accuracy:", (cmc[0] * 100))
-        print("Top 3 accuracy:", (cmc[2] * 100))
-        print("Top 5 accuracy:", (cmc[4] * 100))
-        print("Top 10 accuracy:", (cmc[9] * 100))
+        print("Top 1 accuracy:", (float(cmc[0]) * 100))
+        print("Top 3 accuracy:", (float(cmc[2]) * 100))
+        print("Top 5 accuracy:", (float(cmc[4]) * 100))
+        print("Top 10 accuracy:", (float(cmc[9]) * 100))
         print("mAP:", mAP)
         print("mINP:", mINP)
         print(f"BAKS = {np.mean(baks[-np.inf])}")
@@ -1629,20 +1647,20 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         )
 
         micro_results = {
-            "Top-1 Accuracy": (cmc[0] * 100),
-            "Top-3 Accuracy": (cmc[2] * 100),
-            "Top-5 Accuracy": (cmc[4] * 100),
-            "Top-10 Accuracy": (cmc[9] * 100),
+            "Top-1 Accuracy": (float(cmc[0]) * 100),
+            "Top-3 Accuracy": (float(cmc[2]) * 100),
+            "Top-5 Accuracy": (float(cmc[4]) * 100),
+            "Top-10 Accuracy": (float(cmc[9]) * 100),
             "mAP": mAP,
             "mINP": mINP,
             "BAKS": np.mean(baks[-np.inf]),
             "BAUS@0.7": np.mean(baus[0.7]),
-            "Normalized Accuracy@0.7": np.sqrt(np.mean(baks[0.7]) * np.mean(baks[0.7])),
+            "Normalized Accuracy@0.7": np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])),
             "ROC AUC": roc_score,
         }
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, f"micro_metrics_{epoch+1}.json"), "w") as fp:
-            json.dump(micro_results, fp)
+            json.dump(micro_results, fp, default=_json_default)
 
         # keep the global extractions for the per-dataset loop below (O6)
         _global_query_features = default_query_features
@@ -1748,10 +1766,10 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
             roc_score = auc_roc_new_class(y_true_w_new, scores, new_individual)
 
-            # print("Top 1 accuracy:", (cmc[0] * 100))
-            # print("Top 3 accuracy:", (cmc[2] * 100))
-            # print("Top 5 accuracy:", (cmc[4] * 100))
-            # print("Top 10 accuracy:", (cmc[9] * 100))
+            # print("Top 1 accuracy:", (float(cmc[0]) * 100))
+            # print("Top 3 accuracy:", (float(cmc[2]) * 100))
+            # print("Top 5 accuracy:", (float(cmc[4]) * 100))
+            # print("Top 10 accuracy:", (float(cmc[9]) * 100))
             # print("mAP:", mAP)
             # print("mINP:", mINP)
             # print(f'BAKS = {np.mean(baks[-np.inf])}')
@@ -1763,16 +1781,16 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             )
 
             subset_results = {
-                "Top-1 Accuracy": (cmc[0] * 100),
-                "Top-3 Accuracy": (cmc[2] * 100),
-                "Top-5 Accuracy": (cmc[4] * 100),
-                "Top-10 Accuracy": (cmc[9] * 100),
+                "Top-1 Accuracy": (float(cmc[0]) * 100),
+                "Top-3 Accuracy": (float(cmc[2]) * 100),
+                "Top-5 Accuracy": (float(cmc[4]) * 100),
+                "Top-10 Accuracy": (float(cmc[9]) * 100),
                 "mAP": mAP,
                 "mINP": mINP,
                 "BAKS": np.mean(baks[-np.inf]),
                 "BAUS@0.7": np.mean(baus[0.7]),
                 "Normalized Accuracy@0.7": np.sqrt(
-                    np.mean(baks[0.7]) * np.mean(baks[0.7])
+                    np.mean(baks[0.7]) * np.mean(baus[0.7])
                 ),
                 "ROC AUC": roc_score,
             }
@@ -1862,10 +1880,10 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
             baks[t] = BAKS(y_true, y_pred, identity_test_only)
             baus[t] = BAUS(y_true, y_pred, identity_test_only, new_individual)
         roc_score = auc_roc_new_class(y_true_w_new, scores, new_individual)
-        print("Top 1 accuracy:", (cmc[0] * 100))
-        print("Top 3 accuracy:", (cmc[2] * 100))
-        print("Top 5 accuracy:", (cmc[4] * 100))
-        print("Top 10 accuracy:", (cmc[9] * 100))
+        print("Top 1 accuracy:", (float(cmc[0]) * 100))
+        print("Top 3 accuracy:", (float(cmc[2]) * 100))
+        print("Top 5 accuracy:", (float(cmc[4]) * 100))
+        print("Top 10 accuracy:", (float(cmc[9]) * 100))
         print("mAP:", mAP)
         print("mINP:", mINP)
         print(f"BAKS = {np.mean(baks[-np.inf])}")
@@ -1880,15 +1898,15 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         )
 
         results = {
-            "Top-1 Accuracy": (cmc[0] * 100),
-            "Top-3 Accuracy": (cmc[2] * 100),
-            "Top-5 Accuracy": (cmc[4] * 100),
-            "Top-10 Accuracy": (cmc[9] * 100),
+            "Top-1 Accuracy": (float(cmc[0]) * 100),
+            "Top-3 Accuracy": (float(cmc[2]) * 100),
+            "Top-5 Accuracy": (float(cmc[4]) * 100),
+            "Top-10 Accuracy": (float(cmc[9]) * 100),
             "mAP": mAP,
             "mINP": mINP,
             "BAKS": np.mean(baks[-np.inf]),
             "BAUS@0.7": np.mean(baus[0.7]),
-            "Normalized Accuracy@0.7": np.sqrt(np.mean(baks[0.7]) * np.mean(baks[0.7])),
+            "Normalized Accuracy@0.7": np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])),
             "ROC AUC": roc_score,
         }
 
@@ -1896,5 +1914,5 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, f"evaluation_metrics_{epoch+1}.json"), "w") as fp:
-        json.dump(results, fp)
+        json.dump(results, fp, default=_json_default)
     return micro_results

@@ -49,10 +49,17 @@ MIN_FREE_MIB="${MIN_FREE_MIB:-16000}"
 
 GPUS="${GPUS:-0 1 2 3 4 5 6 7}"
 
+# How many of our jobs may share one GPU. Measured per-job demand is ~9.3 GiB peak
+# (6.1-7.7 GiB resident + a ~1.5 GiB faiss StandardGpuResources temporary during
+# compute_jaccard_distance), so an H200 at 140 GiB has room for several. MIN_FREE_MIB is
+# scaled by this below so the gate still reserves headroom for every slot.
+MAX_JOBS_PER_GPU="${MAX_JOBS_PER_GPU:-1}"
+
 # Every launcher names its tmux session hitl_<queue>_g<gpu>_<job>, so a single pattern
 # finds our jobs on a GPU regardless of which queue placed them there.
 sessions() { tmux ls 2>/dev/null | cut -d: -f1; }
-gpu_busy() { sessions | grep -q "^hitl_[a-z0-9]*_g${1}_"; }
+gpu_jobs() { sessions | grep -c "^hitl_[a-z0-9]*_g${1}_"; }
+gpu_busy() { [ "$(gpu_jobs "$1")" -ge "$MAX_JOBS_PER_GPU" ]; }
 
 # Pick the GPU with the most free memory that has no job of ours; print nothing if none
 # clears MIN_FREE_MIB.
@@ -63,6 +70,8 @@ best_gpu() {
     read -r used total <<< "$(nvidia-smi -i "$g" --query-gpu=memory.used,memory.total \
         --format=csv,noheader,nounits | tr ',' ' ')"
     free=$((total - used))
+    # require headroom for this job; co-tenants already show up in `used`
+    [ "$free" -lt "$MIN_FREE_MIB" ] && continue
     if [ "$free" -gt "$bestfree" ]; then bestfree=$free; best=$g; fi
   done
   [ -n "$best" ] && [ "$bestfree" -ge "$MIN_FREE_MIB" ] && echo "$best"

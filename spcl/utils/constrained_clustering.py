@@ -43,9 +43,35 @@ def FINCH(
     data = data.astype(np.float32)
 
     min_sim = None
-    adj, orig_dist = clust_rank(
-        data, use_ann_above_samples, initial_rank, distance, verbose
-    )
+    # item 1: this was a positional call, which is why finch-clust had to be pinned to
+    # ==0.2.1. In 0.2.2+ the signature became
+    #   clust_rank(mat, initial_rank=None, metric=..., verbose=..., ann_threshold=...)
+    # returning 4 values instead of 2, so the positional form silently bound
+    # use_ann_above_samples (70000) to initial_rank. That 0-d value reached
+    # scipy.sparse.csr_matrix, which calls len() on it -> "TypeError: len() of unsized
+    # object", swallowed by a bare except into a pdb prompt. AAS then contributed zero
+    # constraints and the run hung. Binding by keyword against the installed signature
+    # removes the pin without committing to either version.
+    import inspect as _inspect
+
+    _params = _inspect.signature(clust_rank).parameters
+    if "ann_threshold" in _params:  # 0.2.2+
+        _out = clust_rank(
+            data,
+            initial_rank=initial_rank,
+            metric=distance,
+            verbose=verbose,
+            ann_threshold=use_ann_above_samples,
+        )
+    else:  # <=0.2.1
+        _out = clust_rank(
+            data,
+            use_ann_above_samples=use_ann_above_samples,
+            initial_rank=initial_rank,
+            distance=distance,
+            verbose=verbose,
+        )
+    adj, orig_dist = _out[0], _out[1]
     initial_rank = None
     group, num_clust = get_clust(adj, [], min_sim)
     c, mat = get_merge([], group, data)

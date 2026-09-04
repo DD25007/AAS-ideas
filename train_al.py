@@ -145,6 +145,9 @@ def main():
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
+        # R6: torch.manual_seed does not cover the CUDA RNGs used by dropout and any
+        # GPU-side sampling; without this a "seeded" run was never fully seeded.
+        torch.cuda.manual_seed_all(args.seed)
         cudnn.deterministic = True
 
     main_worker(args)
@@ -154,7 +157,16 @@ def main_worker(args):
     global start_epoch, best_mAP
     start_time = time.monotonic()
 
-    cudnn.benchmark = True
+    # R6: this line used to sit 9 lines below `cudnn.deterministic = True` and silently
+    # defeat it -- benchmark mode re-enables nondeterministic algorithm selection. The
+    # consequence was measured, not assumed: two identical runs with the same --seed
+    # diverged at epoch 0, *before any gradient step* (2287 vs 2281 clusters), and that
+    # propagated to ~1 mAP by epoch 52. An AL run did not reproduce against itself, so no
+    # refactor could ever be validated by re-running one.
+    #
+    # Measured cost of turning autotuning off on this workload: -0.3% (2.38 -> 2.37
+    # ms/step), i.e. nothing. Set HITL_CUDNN_BENCHMARK=1 to restore the old behaviour.
+    cudnn.benchmark = os.environ.get("HITL_CUDNN_BENCHMARK", "").lower() in ("1", "true", "yes")
 
     sys.stdout = Logger(osp.join(args.logs_dir, "log.txt"))
     print("==========\nArgs:{}\n==========".format(args))

@@ -14,7 +14,14 @@ scipy>=1.10,<1.14
 pandas>=1.1.4,<3
 scikit-learn>=1.0.1,<1.6
 
-finch-clust==0.2.1  # 0.2.2+ changed clust_rank signature/return; breaks spcl/utils/constrained_clustering.py FINCH wrapper
+# Pinned for RESULT reproducibility, no longer for compatibility: as of 2026-09-03
+# spcl/utils/constrained_clustering.py binds clust_rank by keyword against the
+# installed signature and handles both the 2- and 4-value return, so the code runs
+# on 0.2.2+ as well (verified against the 0.2.3 source). The pin stays because 0.2.3
+# adds a FAISS branch, an ann_threshold default of 10k (vs the 70k this code passes)
+# and a random_state knob -- all of which can change the FINCH partition, and hence
+# every AAS number. Lift it only with a parity run behind it.
+finch-clust==0.2.1
 active-semi-supervised-clustering
 metric-learn>=0.4
 

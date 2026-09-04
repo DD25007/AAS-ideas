@@ -29,7 +29,11 @@ class ResNet(nn.Module):
         # Construct base (pretrained) resnet
         if depth not in ResNet.__factory:
             raise KeyError("Unsupported depth:", depth)
-        resnet = ResNet.__factory[depth](pretrained=pretrained)
+        # item 5: torchvision deprecated `pretrained=` in 0.13 and warns on every
+        # model construction. `weights="IMAGENET1K_V1"` is what `pretrained=True`
+        # resolves to -- verified identical across all 320 state_dict tensors.
+        _w = "IMAGENET1K_V1" if pretrained else None
+        resnet = ResNet.__factory[depth](weights=_w)
         resnet.layer4[0].conv2.stride = (1,1)
         resnet.layer4[0].downsample[0].stride = (1,1)
         self.base = nn.Sequential(

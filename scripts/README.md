@@ -66,6 +66,10 @@ GPUS="0 1 2 3"  MIN_FREE_MIB=20000  bash scripts/queue.sh al outputs_new
 - `DATAROOT` — `$REPO/dataroot`, whose `wildlife` symlink gives the SpCL loader the
   `<data-dir>/wildlife/wildlifereid-10k/metadata.csv` path it expects.
 - `DATASET_PATH` — the dataset root `main.py` takes directly.
+- `MAX_JOBS_PER_GPU` — 1 by default. Measured per-job demand is ~9.3 GiB peak, so an H200
+  (140 GiB) fits several; `MAX_JOBS_PER_GPU=3` triples grid throughput when the GPUs are
+  otherwise idle. The VRAM gate is applied per slot, so a GPU is only chosen if it has
+  `MIN_FREE_MIB` free *at that moment* — co-tenants already count in `used`.
 - `MIN_FREE_MIB` — 16000. Peak real demand is ~9.3 GiB (6.1 GiB resident + a ~1.5 GiB faiss
   `StandardGpuResources` temporary during `compute_jaccard_distance`); the headroom covers a
   co-tenant that grows *after* we launch, which a launch-time check cannot otherwise catch.

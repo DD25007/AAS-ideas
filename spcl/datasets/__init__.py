@@ -3,9 +3,8 @@ import warnings
 
 from .wildlife import Wildlife
 
-
 __factory = {
-    'wildlife': Wildlife,
+    "wildlife": Wildlife,
 }
 
 
@@ -20,7 +19,7 @@ def create(name, root, *args, **kwargs):
     Parameters
     ----------
     name : str
-        The dataset name. 
+        The dataset name.
     root : str
         The path to the dataset directory.
     split_id : int, optional

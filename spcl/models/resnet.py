@@ -4,11 +4,8 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn import init
 import torchvision
-import torch
 
-
-__all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
-           'resnet152']
+__all__ = ["ResNet", "resnet18", "resnet34", "resnet50", "resnet101", "resnet152"]
 
 
 class ResNet(nn.Module):
@@ -20,8 +17,16 @@ class ResNet(nn.Module):
         152: torchvision.models.resnet152,
     }
 
-    def __init__(self, depth, pretrained=True, cut_at_pooling=False,
-                 num_features=0, norm=False, dropout=0, num_classes=0):
+    def __init__(
+        self,
+        depth,
+        pretrained=True,
+        cut_at_pooling=False,
+        num_features=0,
+        norm=False,
+        dropout=0,
+        num_classes=0,
+    ):
         super(ResNet, self).__init__()
         self.pretrained = pretrained
         self.depth = depth
@@ -34,11 +39,18 @@ class ResNet(nn.Module):
         # resolves to -- verified identical across all 320 state_dict tensors.
         _w = "IMAGENET1K_V1" if pretrained else None
         resnet = ResNet.__factory[depth](weights=_w)
-        resnet.layer4[0].conv2.stride = (1,1)
-        resnet.layer4[0].downsample[0].stride = (1,1)
+        resnet.layer4[0].conv2.stride = (1, 1)
+        resnet.layer4[0].downsample[0].stride = (1, 1)
         self.base = nn.Sequential(
-            resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool,
-            resnet.layer1, resnet.layer2, resnet.layer3, resnet.layer4)
+            resnet.conv1,
+            resnet.bn1,
+            resnet.relu,
+            resnet.maxpool,
+            resnet.layer1,
+            resnet.layer2,
+            resnet.layer3,
+            resnet.layer4,
+        )
         self.gap = nn.AdaptiveAvgPool2d(1)
 
         if not self.cut_at_pooling:
@@ -54,7 +66,7 @@ class ResNet(nn.Module):
             if self.has_embedding:
                 self.feat = nn.Linear(out_planes, self.num_features)
                 self.feat_bn = nn.BatchNorm1d(self.num_features)
-                init.kaiming_normal_(self.feat.weight, mode='fan_out')
+                init.kaiming_normal_(self.feat.weight, mode="fan_out")
                 init.constant_(self.feat.bias, 0)
             else:
                 # Change the num_features to CNN output channels
@@ -64,7 +76,9 @@ class ResNet(nn.Module):
             if self.dropout > 0:
                 self.drop = nn.Dropout(self.dropout)
             if self.num_classes > 0:
-                self.classifier = nn.Linear(self.num_features, self.num_classes, bias=False)
+                self.classifier = nn.Linear(
+                    self.num_features, self.num_classes, bias=False
+                )
                 init.normal_(self.classifier.weight, std=0.001)
         init.constant_(self.feat_bn.weight, 1)
         init.constant_(self.feat_bn.bias, 0)
@@ -87,7 +101,7 @@ class ResNet(nn.Module):
         else:
             bn_x = self.feat_bn(x)
 
-        if (self.training is False):
+        if self.training is False:
             bn_x = F.normalize(bn_x)
             return bn_x
 
@@ -109,7 +123,7 @@ class ResNet(nn.Module):
     def reset_params(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                init.kaiming_normal_(m.weight, mode='fan_out')
+                init.kaiming_normal_(m.weight, mode="fan_out")
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):

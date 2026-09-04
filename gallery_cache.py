@@ -121,7 +121,13 @@ def load(key):
             return None  # entries without an RNG snapshot are treated as misses
         _restore_rng(blob["rng_state"])
         return blob["gallery_positions"]
-    except (json.JSONDecodeError, KeyError, OSError, pickle.UnpicklingError, ValueError):
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        OSError,
+        pickle.UnpicklingError,
+        ValueError,
+    ):
         return None  # a damaged entry is a miss, never a wrong answer
 
 

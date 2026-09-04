@@ -6,11 +6,8 @@ url:http://openaccess.thecvf.com/content_cvpr_2017/papers/Zhong_Re-Ranking_Perso
 Matlab version: https://github.com/zhunzhong07/person-re-ranking
 """
 
-import os, sys
 import time
 import numpy as np
-from scipy.spatial.distance import cdist
-import gc
 import faiss
 
 import torch
@@ -93,7 +90,7 @@ def compute_jaccard_distance(
         off = 0
         for _i, _idx, _s in _pending:
             n = _s.numel()
-            V[_i, _idx] = big[off:off + n].astype(mat_type)
+            V[_i, _idx] = big[off : off + n].astype(mat_type)
             off += n
         _pending.clear()
 

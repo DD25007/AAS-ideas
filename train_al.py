@@ -43,7 +43,7 @@ from spcl.sampling.balanced import LBAS, GBAS
 from spcl.sampling.consistency import ConsistencySampling
 from spcl.sampling.counting_clusters import CountingClusters
 
-from spcl.utils.wildlife_utils import get_evaluation_results
+from utils import get_evaluation_results
 
 from wildlife_tools.features import DeepFeatures
 
@@ -124,6 +124,26 @@ def get_test_loader(dataset, height, width, batch_size, workers, testset=None):
     return test_loader
 
 
+def _ckpt(tag, arr):
+    """Checksum a pipeline stage when HITL_DEBUG_CHECKSUM=1 (R6 bisect).
+
+    Two identical runs still diverge at epoch 0 (2279 vs 2290 clusters) even sequentially
+    on one GPU, while every stage tested in isolation is bit-identical. This prints a hash
+    at each stage of the *real* pipeline so the first point of divergence can be located
+    instead of reconstructed.
+    """
+    if os.environ.get("HITL_DEBUG_CHECKSUM", "").lower() not in ("1", "true", "yes"):
+        return
+    import hashlib
+    import numpy as _np
+    import torch as _torch
+
+    a = arr.detach().cpu().numpy() if isinstance(arr, _torch.Tensor) else _np.asarray(arr)
+    a = _np.ascontiguousarray(a)
+    print(f"CKSUM {tag}: shape={a.shape} sha={hashlib.sha256(a.tobytes()).hexdigest()[:20]} "
+          f"sum={float(a.sum()):.10g}", flush=True)
+
+
 def create_model(args):
     model = models.create(
         args.arch,
@@ -166,7 +186,11 @@ def main_worker(args):
     #
     # Measured cost of turning autotuning off on this workload: -0.3% (2.38 -> 2.37
     # ms/step), i.e. nothing. Set HITL_CUDNN_BENCHMARK=1 to restore the old behaviour.
-    cudnn.benchmark = os.environ.get("HITL_CUDNN_BENCHMARK", "").lower() in ("1", "true", "yes")
+    cudnn.benchmark = os.environ.get("HITL_CUDNN_BENCHMARK", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     sys.stdout = Logger(osp.join(args.logs_dir, "log.txt"))
     print("==========\nArgs:{}\n==========".format(args))
@@ -251,6 +275,7 @@ def main_worker(args):
             [features[f].unsqueeze(0) for f, _, _ in sorted(dataset.train)], 0
         )
         memory.features = F.normalize(features, dim=1).cuda()
+        _ckpt('memory_features', memory.features)
         if gt_labels is None and sampler is not None:
             gt_labels = [pid for _, pid, _ in sorted(dataset.train)]
             sampler.set_gt_labels(gt_labels)
@@ -284,6 +309,7 @@ def main_worker(args):
                 )
                 features = memory.features.clone()
                 rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
+                _ckpt(f'epoch{epoch}_rerank', rerank_dist)
 
                 if epoch % (args.eval_step) == 0 and sampler is not None:
                     if args.sampler == "None":
@@ -320,6 +346,7 @@ def main_worker(args):
 
                 # select & cluster images as training set of this epochs
                 pseudo_labels = cluster.fit_predict(rerank_dist)
+                _ckpt(f'epoch{epoch}_labels', pseudo_labels)
                 pseudo_labels_tight = cluster_tight.fit_predict(rerank_dist)
                 pseudo_labels_loose = cluster_loose.fit_predict(rerank_dist)
                 num_ids = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
@@ -476,6 +503,8 @@ def main_worker(args):
                 R_indep = 1 - torch.min(label_sim, label_sim_loose).sum(-1) / torch.max(
                     label_sim, label_sim_loose
                 ).sum(-1)
+                _ckpt(f'epoch{epoch}_Rcomp', R_comp)
+                _ckpt(f'epoch{epoch}_Rindep', R_indep)
                 assert (R_comp.min() >= 0) and (R_comp.max() <= 1)
                 assert (R_indep.min() >= 0) and (R_indep.max() <= 1)
 
@@ -496,6 +525,7 @@ def main_worker(args):
                 cluster_R_indep = [
                     min(cluster_R_indep[i]) for i in sorted(cluster_R_indep.keys())
                 ]
+                _ckpt(f'epoch{epoch}_clusterRindep', np.array(cluster_R_indep))
                 cluster_R_indep_noins = [
                     iou
                     for iou, num in zip(cluster_R_indep, sorted(cluster_img_num.keys()))
@@ -531,7 +561,10 @@ def main_worker(args):
                         outliers += 1
 
                 # Impose ML and CL constraints on the final pseudo labels
+                _ckpt(f'epoch{epoch}_preNP3', np.array(constrained_pseudo_labels))
                 if sampler is not None:
+                    # ml_pairs/cl_pairs only exist on the sampler path
+                    _ckpt(f'epoch{epoch}_mlcl', np.array([len(ml_pairs), len(cl_pairs)]))
                     constrained_pseudo_labels = constrained_clustering(
                         np.array(constrained_pseudo_labels),
                         rerank_dist,
@@ -540,6 +573,7 @@ def main_worker(args):
                         ml_pairs=ml_pairs,
                         cl_pairs=cl_pairs,
                     )
+                    _ckpt(f'epoch{epoch}_postNP3', np.array(constrained_pseudo_labels))
                     for i, label in enumerate(constrained_pseudo_labels):
                         fname, _, cid = pseudo_labeled_dataset[i]
                         pseudo_labeled_dataset[i] = fname, label, cid

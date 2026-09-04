@@ -54,32 +54,104 @@ AL_ROWS = [
 # Animal Re-Identification with Ambiguity-Aware Sampling", p.39188). All 13-dataset macro
 # averages, in percent. The AL block is the paper's mean over 4 runs.
 PAPER = {
-    ("al", "USL"):    {"mAP": 44.95, "mINP": 27.37, "BAKS": 55.38, "AUC ROC": 67.01,
-                       "Top-1": 56.65, "Top-3": 71.04, "Top-5": 76.35, "Top-10": 84.32},
-    ("al", "random"): {"mAP": 46.67, "mINP": 29.02, "BAKS": 57.28, "AUC ROC": 68.33,
-                       "Top-1": 58.11, "Top-3": 71.96, "Top-5": 78.35, "Top-10": 85.03},
-    ("al", "GBAS"):   {"mAP": 48.61, "mINP": 30.35, "BAKS": 60.53, "AUC ROC": 71.50,
-                       "Top-1": 60.56, "Top-3": 73.89, "Top-5": 80.06, "Top-10": 87.41},
-    ("al", "LBAS"):   {"mAP": 52.15, "mINP": 34.06, "BAKS": 63.62, "AUC ROC": 73.15,
-                       "Top-1": 63.99, "Top-3": 76.64, "Top-5": 82.44, "Top-10": 88.18},
-    ("al", "CC"):     {"mAP": 50.72, "mINP": 32.73, "BAKS": 61.21, "AUC ROC": 72.30,
-                       "Top-1": 61.78, "Top-3": 75.58, "Top-5": 80.44, "Top-10": 87.41},
-    ("al", "ConSam"): {"mAP": 56.14, "mINP": 38.17, "BAKS": 67.15, "AUC ROC": 75.21,
-                       "Top-1": 67.71, "Top-3": 79.08, "Top-5": 85.04, "Top-10": 91.18},
-    ("table1", "resnet50_baseline"):
-                      {"mAP": 38.88, "mINP": 21.34, "BAKS": 48.62, "AUC ROC": 60.87,
-                       "Top-1": 48.37, "Top-3": 65.21, "Top-5": 71.01, "Top-10": 81.05},
+    ("al", "USL"): {
+        "mAP": 44.95,
+        "mINP": 27.37,
+        "BAKS": 55.38,
+        "AUC ROC": 67.01,
+        "Top-1": 56.65,
+        "Top-3": 71.04,
+        "Top-5": 76.35,
+        "Top-10": 84.32,
+    },
+    ("al", "random"): {
+        "mAP": 46.67,
+        "mINP": 29.02,
+        "BAKS": 57.28,
+        "AUC ROC": 68.33,
+        "Top-1": 58.11,
+        "Top-3": 71.96,
+        "Top-5": 78.35,
+        "Top-10": 85.03,
+    },
+    ("al", "GBAS"): {
+        "mAP": 48.61,
+        "mINP": 30.35,
+        "BAKS": 60.53,
+        "AUC ROC": 71.50,
+        "Top-1": 60.56,
+        "Top-3": 73.89,
+        "Top-5": 80.06,
+        "Top-10": 87.41,
+    },
+    ("al", "LBAS"): {
+        "mAP": 52.15,
+        "mINP": 34.06,
+        "BAKS": 63.62,
+        "AUC ROC": 73.15,
+        "Top-1": 63.99,
+        "Top-3": 76.64,
+        "Top-5": 82.44,
+        "Top-10": 88.18,
+    },
+    ("al", "CC"): {
+        "mAP": 50.72,
+        "mINP": 32.73,
+        "BAKS": 61.21,
+        "AUC ROC": 72.30,
+        "Top-1": 61.78,
+        "Top-3": 75.58,
+        "Top-5": 80.44,
+        "Top-10": 87.41,
+    },
+    ("al", "ConSam"): {
+        "mAP": 56.14,
+        "mINP": 38.17,
+        "BAKS": 67.15,
+        "AUC ROC": 75.21,
+        "Top-1": 67.71,
+        "Top-3": 79.08,
+        "Top-5": 85.04,
+        "Top-10": 91.18,
+    },
+    ("table1", "resnet50_baseline"): {
+        "mAP": 38.88,
+        "mINP": 21.34,
+        "BAKS": 48.62,
+        "AUC ROC": 60.87,
+        "Top-1": 48.37,
+        "Top-3": 65.21,
+        "Top-5": 71.01,
+        "Top-10": 81.05,
+    },
     # the paper's "MegaDescriptor" foundation row -- reproduced as ImageNet Swin-L (item 15)
-    ("table1", "swin_foundation"):
-                      {"mAP": 45.65, "mINP": 26.57, "BAKS": 55.57, "AUC ROC": 64.12,
-                       "Top-1": 56.46, "Top-3": 70.83, "Top-5": 78.14, "Top-10": 85.48},
+    ("table1", "swin_foundation"): {
+        "mAP": 45.65,
+        "mINP": 26.57,
+        "BAKS": 55.57,
+        "AUC ROC": 64.12,
+        "Top-1": 56.46,
+        "Top-3": 70.83,
+        "Top-5": 78.14,
+        "Top-10": 85.48,
+    },
     # the paper reports a single skyline; our four variants all target it
-    ("table1", "resnet50_skyline_e30_zerobased"):
-                      {"mAP": 64.29, "mINP": 49.75, "BAKS": 72.04, "AUC ROC": 80.02,
-                       "Top-1": 72.88, "Top-3": 81.06, "Top-5": 85.38, "Top-10": 91.27},
+    ("table1", "resnet50_skyline_e30_zerobased"): {
+        "mAP": 64.29,
+        "mINP": 49.75,
+        "BAKS": 72.04,
+        "AUC ROC": 80.02,
+        "Top-1": 72.88,
+        "Top-3": 81.06,
+        "Top-5": 85.38,
+        "Top-10": 91.27,
+    },
 }
-for _k in ("resnet50_skyline_e30_offset", "resnet50_skyline_e50_zerobased",
-           "resnet50_skyline_e50_offset"):
+for _k in (
+    "resnet50_skyline_e30_offset",
+    "resnet50_skyline_e50_zerobased",
+    "resnet50_skyline_e50_offset",
+):
     PAPER[("table1", _k)] = PAPER[("table1", "resnet50_skyline_e30_zerobased")]
 
 
@@ -90,8 +162,11 @@ TABLE1_ROWS = [
     ("resnet50_skyline_e30_offset", "Skyline, 30 ep, offset"),
     ("resnet50_skyline_e50_zerobased", "Skyline, 50 ep, zerobased"),
     ("resnet50_skyline_e50_offset", "Skyline, 50 ep, offset"),
-    ("megadescriptor",             "MegaDescriptor row, authors' path (= ImageNet Swin-L)"),
-    ("megadescriptor_realweights", "MegaDescriptor-L-224, real weights (side experiment)"),
+    ("megadescriptor", "MegaDescriptor row, authors' path (= ImageNet Swin-L)"),
+    (
+        "megadescriptor_realweights",
+        "MegaDescriptor-L-224, real weights (side experiment)",
+    ),
 ]
 
 
@@ -108,14 +183,6 @@ def macro(path):
     return out
 
 
-def log_summary(run_dir):
-    """The 'mean,...' line main.py writes at the end of a row run, as a cross-check."""
-    for log in sorted(glob.glob(os.path.join(run_dir, "*.log"))):
-        with open(log, errors="replace") as fh:
-            for line in fh:
-                if line.startswith("mean,"):
-                    return [float(x) for x in line.strip().split(",")[1:] if x]
-    return None
 
 
 PARTIAL = set()
@@ -155,9 +222,11 @@ def find_runs(root):
                 # the newest cycle silently mixes a mid-training number into a row mean
                 # that reads as final -- warn loudly and tag the row.
                 ep = int(re.search(r"_(\d+)\.json$", f).group(1))
-                print(f"warning: al/{sampler}/s{seed} has no final eval (52); using epoch "
-                      f"{ep} -- row is INCOMPLETE, not comparable to a finished run",
-                      file=sys.stderr)
+                print(
+                    f"warning: al/{sampler}/s{seed} has no final eval (52); using epoch "
+                    f"{ep} -- row is INCOMPLETE, not comparable to a finished run",
+                    file=sys.stderr,
+                )
                 PARTIAL.add((sampler, seed, ep))
             m = macro(f)
             # Track the cycle this came from: a shortened smoke run stops early, and
@@ -299,19 +368,32 @@ def compare(a_root, b_root, tol):
     for key in shared:
         seeds = sorted(set(a_runs[key]) & set(b_runs[key]))
         if not seeds:
-            partial.append((key, "no seed in common")); continue
+            partial.append((key, "no seed in common"))
+            continue
         if set(a_runs[key]) != set(b_runs[key]):
-            partial.append((key, f"comparing on seeds {seeds} "
-                                 f"(baseline has {sorted(a_runs[key])}, "
-                                 f"candidate has {sorted(b_runs[key])})"))
-        mism = [(s, a_runs[key][s].get("_epoch"), b_runs[key][s].get("_epoch"))
-                for s in seeds
-                if a_runs[key][s].get("_epoch") != b_runs[key][s].get("_epoch")]
+            partial.append(
+                (
+                    key,
+                    f"comparing on seeds {seeds} "
+                    f"(baseline has {sorted(a_runs[key])}, "
+                    f"candidate has {sorted(b_runs[key])})",
+                )
+            )
+        mism = [
+            (s, a_runs[key][s].get("_epoch"), b_runs[key][s].get("_epoch"))
+            for s in seeds
+            if a_runs[key][s].get("_epoch") != b_runs[key][s].get("_epoch")
+        ]
         if mism:
             for s, ae, be in mism:
-                skipped.append((key, f"seed {s} read at epoch {ae} vs {be} — not comparable"))
-            seeds = [s for s in seeds
-                     if a_runs[key][s].get("_epoch") == b_runs[key][s].get("_epoch")]
+                skipped.append(
+                    (key, f"seed {s} read at epoch {ae} vs {be} — not comparable")
+                )
+            seeds = [
+                s
+                for s in seeds
+                if a_runs[key][s].get("_epoch") == b_runs[key][s].get("_epoch")
+            ]
             if not seeds:
                 continue
         for label, _, _ in METRICS:
@@ -367,7 +449,9 @@ def compare(a_root, b_root, tol):
 def vs_paper(root):
     """Every reproduced row against the paper's published Table 1, all metrics."""
     summary = summarise(find_runs(root))
-    order = [("al", m, lab) for m, lab in AL_ROWS] + [("table1", r, lab) for r, lab in TABLE1_ROWS]
+    order = [("al", m, lab) for m, lab in AL_ROWS] + [
+        ("table1", r, lab) for r, lab in TABLE1_ROWS
+    ]
     cols = [m[0] for m in METRICS]
     print(f"\n## {root}  vs  published Table 1 (AAAI-26)\n")
     print("| Row | " + " | ".join(cols) + " |")
@@ -381,7 +465,8 @@ def vs_paper(root):
         cells = []
         for c in cols:
             if c not in agg or c not in ref:
-                cells.append("--"); continue
+                cells.append("--")
+                continue
             d = agg[c][0] - ref[c]
             cells.append(f"{agg[c][0]:.2f} ({d:+.2f})")
             if c == "mAP" and not tag:
@@ -389,8 +474,10 @@ def vs_paper(root):
         print(f"| {label}{tag} | " + " | ".join(cells) + " |")
     print("\nEach cell: reproduced (delta vs paper). Negative = below the paper.")
     if deltas:
-        print(f"mAP delta over complete rows: mean {sum(deltas)/len(deltas):+.2f}, "
-              f"range {min(deltas):+.2f} .. {max(deltas):+.2f}")
+        print(
+            f"mAP delta over complete rows: mean {sum(deltas)/len(deltas):+.2f}, "
+            f"range {min(deltas):+.2f} .. {max(deltas):+.2f}"
+        )
 
 
 def main():
@@ -409,8 +496,11 @@ def main():
         metavar=("BASELINE", "CANDIDATE"),
         help="diff two trees and exit non-zero if any cell moves beyond --tol",
     )
-    p.add_argument("--paper", action="store_true",
-                   help="compare against the paper's published Table 1")
+    p.add_argument(
+        "--paper",
+        action="store_true",
+        help="compare against the paper's published Table 1",
+    )
     p.add_argument(
         "--tol",
         type=float,

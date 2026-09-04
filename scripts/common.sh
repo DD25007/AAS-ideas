@@ -28,6 +28,17 @@ CONDA_ENV_PREFIX="$(cd "$(dirname "$(dirname "$PYTHON")")" && pwd)"
 export LD_LIBRARY_PATH="$CONDA_ENV_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONNOUSERSITE=1
 
+# R6 root cause. The AAS sampler iterates `nx.connected_components()` over graphs whose
+# nodes are strings (`f'dbscan-{i}'` / `f'finch-{j}'`, spcl/sampling/consistency.py:105-107).
+# Python randomises string hashing per process, so that set-iteration order differs between
+# runs -- flipping which pair is chosen at a boundary and yielding one more/fewer constraint
+# pair. Measured: 3 processes, 3 different orders with a random seed; identical with a fixed
+# one. That single-pair delta compounds through NP3 and 50 epochs into the ~1 mAP spread.
+#
+# Fixing the seed makes AL runs reproducible. The cleaner code-level fix is to sort the
+# component iteration in the sampler; this covers any other string-set iteration too.
+export PYTHONHASHSEED=0
+
 export HF_HOME="${HF_HOME:-/storage/dd25007/cache/huggingface}"
 export TORCH_HOME="${TORCH_HOME:-/storage/dd25007/cache/torch}"
 export WANDB_MODE="${WANDB_MODE:-offline}"

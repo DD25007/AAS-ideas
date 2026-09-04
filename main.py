@@ -108,7 +108,6 @@ def run_one_cycle(
             database_subset.metadata["identity"].unique().shape[0],
         )
 
-
         logs.update(
             {
                 "Number of +ve Annotations": len(ml_pairs),

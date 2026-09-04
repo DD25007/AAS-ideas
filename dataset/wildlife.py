@@ -1,3 +1,11 @@
+"""`WildlifeDatasets` -- the dataset class `main.py` uses (wildlife-tools protocol).
+
+Distinct from `spcl/datasets/wildlife.py`, which defines `Wildlife(BaseImageDataset)`
+against SpCL's dataset protocol (`parse_img_pids`, `process_split`, `check_before_run`)
+for `datasets.create()` in `train_al.py`. Different base class, different consumer,
+only 2 of 4 shared definitions identical -- not a copy to merge.
+"""
+
 import gallery_cache
 import os
 import numpy as np

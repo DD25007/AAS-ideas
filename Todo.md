@@ -852,7 +852,41 @@ by nothing, copied from CoinCheung/triplet-reid-pytorch. Delete it, or add the m
 Root `faiss_utils.py` (107 lines) and `SpCL/spcl/utils/faiss_utils.py` (108 lines) are
 identical apart from a trailing newline. Keep one and import it.
 
-## C3. `utils.py` vs `spcl/utils/wildlife_utils.py` — SCOPED 2026-09-03, edit deferred
+## ~~C3. `utils.py` vs `spcl/utils/wildlife_utils.py`~~ — DONE 2026-09-04
+
+> **`spcl/utils/wildlife_utils.py`: 1,918 lines -> 41**, a re-export of the repo-root
+> `utils.py` (the `faiss_utils.py` / `evaluation.py` pattern from C2).
+>
+> The one real semantic difference across 1,800 lines was `dataset.dataset` vs
+> `dataset.subset`, now handled by `_subset_name()` -- safe because the two dataset classes
+> set one attribute each and never both (verified on a live `Wildlife`: `.subset=combined`,
+> `.dataset=None`). Root's `get_model` and `CustomTrainer` are strict supersets; the stray
+> debug `print` in `load_checkpoint` is gone.
+>
+> **Verified, both paths:**
+> - AST: the spcl consumer now gets 21/25 identical definitions, the two changes being the
+>   intended shim and the superset `get_model` (inert for its caller -- MegaDescriptor takes
+>   the same `else` branch).
+> - eval-only gate: mAP **+0.0000**, mINP +0.0013, AUC ROC -0.0024 -- byte-for-byte the
+>   pre-existing O2/O6 batching residual, i.e. **C3 contributed exactly zero**.
+> - AL smoke (`train_al.py`, 1 epoch): completed, 0 errors.
+>
+> **Streamlined further, same day.** The re-export shim was itself an unnecessary hop:
+> `train_al.py` imported `get_evaluation_results` from `spcl.utils.wildlife_utils`, which
+> only re-exported it from `utils`. The shim is now deleted and both consumers import
+> `utils` directly:
+>
+> ```
+> train_al.py               : from utils import get_evaluation_results
+> spcl/datasets/wildlife.py : from utils import get_model, set_seed
+> ```
+>
+> The tree now has exactly four shared root modules -- `utils`, `faiss_utils`, `evaluation`,
+> `gallery_cache` -- each imported directly by whoever needs it, with no forwarding layers.
+>
+> Worth doing beyond the line count: this duplication had already cost two real bugs in a
+> single day -- the `Normalized Accuracy@0.7` error and the NEP 50 float32 break each had to
+> be fixed in two places, and either could have been missed in one.
 
 > **The "876 differing lines" is almost entirely formatting.** An AST comparison of the two
 > modules (which ignores layout) gives the real picture:
@@ -906,7 +940,37 @@ only **134 lines differ**, and **17 of 19** top-level functions share names —
 Two copies of the NP3 constrained-clustering implementation and the whole metric suite
 means a bug fixed in one silently persists in the other. Consolidate into one module.
 
-## C4. `sampling/` is duplicated between root and SpCL — PARTIALLY DONE 2026-09-01
+## C4. `sampling/` root vs spcl — WON'T MERGE 2026-09-04 (they are not duplicates)
+
+> Measured with the same AST comparison that made C3 tractable, and it gives the opposite
+> answer:
+>
+> | pair | identical / shared defs |
+> |---|---|
+> | `consistency.py` | **0 / 3** (1253 lines vs 427) |
+> | `counting_clusters.py` | 0 / 4 |
+> | `random.py` | 1 / 4 |
+> | `balanced.py` | 2 / 7 |
+> | `dataset/wildlife.py` vs `spcl/datasets/wildlife.py` | 2 / 4 |
+>
+> They have **incompatible constructors** (`(database, n, gallery_size)` vs `args=...`),
+> different base classes (`WildlifeDatasets` vs `Wildlife(BaseImageDataset)`), different
+> consumers (`main.py` vs `train_al.py`), and root's `ConsistencySampling` carries methods
+> the spcl one lacks entirely (`get_sampling_pools`, `select2`,
+> `top_n_high_entropy_outliers`).
+>
+> Merging is therefore a **redesign**, not a de-duplication: it would mean unifying two call
+> contracts and reconciling genuinely different `select()` implementations, where the spcl
+> version is the one that produced the published Table 1. Large risk, no correctness gain.
+>
+> **Done instead:** module headers on all four files stating what each is, who consumes it,
+> the measured divergence, and that they once shadowed each other and silently killed a
+> 16-run batch (item 12). The shadowing itself was fixed by the C3-era rename.
+>
+> **Left open deliberately:** root `sampling/` is reachable only via `main.py --sampler`, a
+> workflow the reproduction never runs -- every Table 1 AL row comes from `train_al.py`. It
+> is live but unexercised code. Deleting it would remove a real entry point, so that is a
+> product decision rather than a cleanup.
 
 > **The danger is gone, the duplication is not.** The SpCL copy is now `spcl/sampling/`,
 > so neither package can shadow the other (item 12). Both copies still exist and still
@@ -1682,7 +1746,36 @@ the fault never shows up in a quick test.
 `scripts/common.sh` now derives `LD_LIBRARY_PATH` and `PYTHONNOUSERSITE` from `$PYTHON`, so
 a run is self-contained regardless of the calling shell.
 
-## R6. AL runs do not reproduce against themselves — PARTIALLY FIXED, root cause still open
+## ~~R6. AL runs do not reproduce against themselves~~ — SOLVED 2026-09-04
+
+> **Cause: `PYTHONHASHSEED`.** The AAS sampler builds networkx graphs with *string* node
+> names (`f'dbscan-{i}'`, `f'finch-{j}'`, `spcl/sampling/consistency.py:105-107,133,146`) and
+> iterates `nx.connected_components()` over them. Python randomises string hashing per
+> process, so set-iteration order differs between runs, flipping which pair is selected at a
+> boundary. That one-pair delta propagates through NP3 and compounds over 50 epochs into the
+> ~1 mAP spread.
+>
+> Isolated: 3 processes gave 3 different component orders with a random seed, and identical
+> order with `PYTHONHASHSEED=0`.
+>
+> **Fix:** `export PYTHONHASHSEED=0` in `scripts/common.sh`.
+>
+> **Verified** — two sequential ConSam runs, same GPU:
+>
+> | | before | after |
+> |---|---|---|
+> | `epoch0_mlcl` (constraint pairs) | 42285 vs 42284 | **42285 = 42285** |
+> | `epoch0_postNP3` | `873806e8` vs `8845804e` | **`5c7a306e` = `5c7a306e`** |
+> | clusters / un-clustered | 2288/4337 vs 2288/4320 | **2292/4327 = 2292/4327** |
+>
+> Consequences: AL runs are now reproducible, so a re-run is finally a valid parity check for
+> them. Numbers shift relative to `outputs_initial`, which ran with random hash seeds -- but
+> there was never a canonical value to preserve, since the old behaviour could not reproduce
+> itself. Eval-only rows are unaffected.
+>
+> **Follow-up (not done):** the cleaner fix is to sort the component iteration in
+> `consistency.py` so the sampler is deterministic regardless of environment. The env var
+> covers any other string-set iteration too, so both are worth having.
 
 `train_al.py:121-133` sets
 
@@ -1847,6 +1940,87 @@ see "Still open" below. It is not evidence of a further cache problem.
 and never exercises the RNG stream the AL samplers consume, so a cache that silently
 desynchronised `np.random` sailed through it. A gate proves what it covers, not what you hope
 it covers -- and the coverage gap should be stated whenever the gate is cited.
+
+### ROOT CAUSE FOUND 2026-09-04: the AAS sampler's pair selection
+
+Located by checksumming the *real* pipeline stage by stage (`HITL_DEBUG_CHECKSUM=1`,
+`_ckpt()` in `train_al.py`) across two sequential runs on one GPU:
+
+| stage | A vs B |
+|---|---|
+| `memory_features` (20565x2048) | identical |
+| `epoch0_rerank` (jaccard) | identical |
+| `epoch0_labels` (DBSCAN) | identical |
+| `R_comp`, `R_indep`, `cluster_R_indep` | identical |
+| `indep_thres` | identical |
+| pseudo-labels entering NP3 (`preNP3`) | **identical** |
+| **`len(ml_pairs) + len(cl_pairs)`** | **42285 vs 42284** |
+| labels leaving NP3 (`postNP3`) | differs (consequence) |
+| reported clusters | 2288/4337 vs 2288/4320 |
+
+**Everything upstream is bit-reproducible.** The sampler returned one constraint pair fewer
+in run B, and NP3 faithfully propagated that into different cluster assignments, which then
+compounds over 50 epochs into the ~1 mAP spread seen at the end.
+
+Every earlier hypothesis was wrong, and each was disproved by measurement rather than
+argument: cuDNN algorithm selection (forward pass repeatable), faiss GPU kNN (0/309,000
+neighbours differ on realistic features), cross-GPU variation (all 8 are identical H200s),
+concurrency (sequential same-GPU still diverges), large CPU reductions (repeatable
+in-process). Useful, but they were all upstream of the actual cause.
+
+#### Candidate mechanisms inside `ConsistencySampling.select()`
+
+Not yet isolated. In rough order of likelihood:
+
+1. **FINCH** — reached via `constrained_clustering(..., FINCH)`. It falls back off
+   `pynndescent`, which is not installed (W4), and that fallback path has never been checked
+   for determinism.
+2. **networkx set iteration** — AAS builds "regions of uncertainty" from connected
+   components of a graph; iteration over `set`/`dict` intermediates can reorder medoid
+   selection, and a single boundary flip is exactly a one-pair difference.
+3. `np.random.choice(..., p=probs, replace=False)` over a pool assembled from sets.
+
+A one-pair delta is the signature of a single boundary flip, not of accumulated float noise.
+
+#### Why this matters beyond reproducibility
+
+This sits in the paper's core contribution, not in scaffolding. It also predicts something
+testable and cheap: **a USL run (no `-s`) should be fully deterministic**, because with no
+sampler `ml_pairs`/`cl_pairs` stay empty and
+`spcl/utils/constrained_clustering.py:96` early-returns `labels` unchanged. If a USL A/B is
+bit-identical, that confirms the diagnosis and localises the fix to the samplers rather than
+the training loop.
+
+#### Prediction CONFIRMED 2026-09-04
+
+The diagnosis predicted that a USL run (no `-s`) would be fully deterministic, since with no
+sampler `ml_pairs`/`cl_pairs` stay empty and `constrained_clustering` early-returns. Two
+sequential USL runs on one GPU:
+
+```
+USL    A: 736 clusters, 5498 un-clustered      B: 736 clusters, 5498 un-clustered   IDENTICAL
+ConSam A: 2288 clusters, 4337 un-clustered     B: 2288 clusters, 4320 un-clustered  DIVERGES
+```
+
+Same code, same GPU, sequential. **The base SpCL pipeline is deterministic; the AL samplers
+are not.** That localises any fix to `spcl/sampling/`, and it means the USL baseline row is
+reproducible today while the five AL rows are not.
+
+**Status: root-caused and confirmed, NOT fixed.** The specific mechanism inside
+`ConsistencySampling.select()` (FINCH fallback / networkx set iteration /
+`np.random.choice` over set-derived pools) is still un-isolated, and no fix has been
+applied.
+
+Instrumentation kept: `_ckpt()` in `train_al.py`, off unless `HITL_DEBUG_CHECKSUM=1`.
+It found this after three wrong hypotheses and is the right tool for finishing the job.
+
+#### Also found while narrowing
+
+Two different `constrained_clustering` functions with incompatible signatures --
+`utils.constrained_clustering(X, method, ...)` and
+`spcl.utils.constrained_clustering.constrained_clustering(labels, rerank_dist, method, ...)`.
+`train_al.py` uses the second. Calling the first with the second's argument order fails with
+a confusing `ValueError: truth value of an array ... is ambiguous`. Worth renaming.
 
 ### Still open
 

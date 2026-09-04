@@ -4,10 +4,8 @@ import numpy as np
 import itertools
 from timm import create_model
 import networkx as nx
-import json
 
 import random
-import scipy.sparse as sp
 from sklearn import metrics
 
 from wildlife_tools.data import WildlifeDataset
@@ -16,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from wildlife_tools.train import ArcFaceLoss, SoftmaxLoss, TripletLoss, BasicTrainer
+from wildlife_tools.train import BasicTrainer
 
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import cdist
@@ -25,11 +23,9 @@ from tqdm import tqdm
 import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import roc_auc_score
-from typing import Optional, List, Tuple, Callable, Any, Dict, Union
-from wildlife_datasets import datasets, metrics, splits
+from typing import Optional, List, Tuple, Callable, Union
+from wildlife_datasets import metrics
 from wildlife_tools.similarity import CosineSimilarity
 from collections import defaultdict
 
@@ -522,239 +518,11 @@ def CDBSCAN(
 # https://link.springer.com/content/pdf/10.1007/978-3-540-72530-5_25.pdf (Proposed in)
 # https://github.com/johnnylu305/Constrained-DBSCAN-Clustering/blob/main/constrainedDBSCAN.m (Implementation from)
 # Problem: Cannot-link constraints might be violated while merging in step 3a.
-def _CDBSCAN(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[]):
-    n = X.shape[0]
-    labels = -np.ones(n, dtype=int)
-    cluster_id = 0
-
-    # Step 1: Compute pairwise distance matrix
-    distance_matrix = cdist(X, X, metric=metric)
-
-    # Step 2: Identify core points
-    core_points = np.zeros(n, dtype=bool)
-    for i in range(n):
-        neighbors = np.where(distance_matrix[i] <= eps)[0]
-        if len(neighbors) >= min_samples:
-            core_points[i] = True
-
-    # Step 3: Build constraint matrices
-    must_link_matrix = np.zeros((n, n), dtype=bool)
-    cannot_link_matrix = np.zeros((n, n), dtype=bool)
-
-    for a, b in ml_pairs:
-        must_link_matrix[a, b] = True
-        must_link_matrix[b, a] = True
-
-    for a, b in cl_pairs:
-        cannot_link_matrix[a, b] = True
-        cannot_link_matrix[b, a] = True
-
-    visited = np.zeros(n, dtype=bool)
-    noise = np.zeros(n, dtype=bool)
-
-    # Step 4: Expand clusters
-    for i in range(n):
-        if visited[i] or not core_points[i]:
-            continue
-
-        cluster_id += 1
-        labels[i] = cluster_id
-        search_queue = [i]
-        visited[i] = True
-
-        while search_queue:
-            point = search_queue.pop(0)
-            neighbors = np.where(distance_matrix[point] <= eps)[0]
-
-            if len(neighbors) < min_samples:
-                continue
-
-            for neighbor in neighbors:
-                if visited[neighbor]:
-                    continue
-
-                if np.any(cannot_link_matrix[neighbor, labels == cluster_id]):
-                    noise[neighbor] = True
-                    continue
-
-                labels[neighbor] = cluster_id
-                visited[neighbor] = True
-                if core_points[neighbor]:
-                    search_queue.append(neighbor)
-
-    # Step 5: Handle noise points
-    labels[noise] = -1
-
-    # Step 6: Enforce must-link constraints
-    for a, b in ml_pairs:
-        if labels[a] != -1 and labels[b] == -1:
-            labels[b] = labels[a]
-        elif labels[b] != -1 and labels[a] == -1:
-            labels[a] = labels[b]
-        elif labels[a] != -1 and labels[b] != -1 and labels[a] != labels[b]:
-            labels[labels == labels[b]] = labels[a]
-
-    # Step 7: Assign remaining noise points based on must-link
-    # for i in range(n):
-    #     if labels[i] == -1:
-    #         related = np.array([pair for pair in ml_pairs if i in pair])
-    #         for pair in related:
-    #             point = pair[0] if pair[1] == i else pair[1]
-    #             if labels[point] >= 0:
-    #                 labels[i] = labels[point]
-    #                 break
-
-    # Step 8: Renumber cluster labels to be consecutive
-    unique_labels = np.unique(labels)
-    unique_labels = unique_labels[unique_labels != -1]
-    label_map = {old: new for new, old in enumerate(unique_labels)}
-    for old, new in label_map.items():
-        labels[labels == old] = new
-
-    # Sanity check for constraints
-    for a, b in ml_pairs:
-        assert (
-            labels[a] == labels[b]
-        ), "must-link constraint violated. Implementation error"
-    for a, b in cl_pairs:
-        assert (
-            labels[a] != labels[b] or labels[a] == -1
-        ), "cannot-link constraint violated. Implementation error"
-
-    return labels
 
 
-class UnionFind:
-    """Union-Find data structure for must-link constraints."""
-
-    def __init__(self, size):
-        self.parent = list(range(size))
-
-    def find(self, x):
-        if self.parent[x] != x:
-            self.parent[x] = self.find(self.parent[x])  # Path compression
-        return self.parent[x]
-
-    def union(self, x, y):
-        fx, fy = self.find(x), self.find(y)
-        if fx != fy:
-            self.parent[fy] = fx
 
 
 # Problem mentioned in the comment
-def constrained_dbscan(X, eps, min_samples, metric="cosine", ml_pairs=[], cl_pairs=[]):
-    """DBSCAN clustering with must-link and cannot-link constraints."""
-
-    n_samples = X.shape[0]
-    uf = UnionFind(n_samples)
-
-    # Step 1: Process must-links with Union-Find
-    for a, b in ml_pairs:
-        uf.union(a, b)
-
-    # Step 2: Map each point to its root (transitive closure)
-    root = [uf.find(i) for i in range(n_samples)]
-
-    # Step 3: Check for cannot-link conflicts
-    # cl_forbidden = defaultdict(set)
-    for a, b in cl_pairs:
-        root_a, root_b = uf.find(a), uf.find(b)
-        if root_a == root_b:
-            raise ValueError(
-                f"Conflict: {a} and {b} are must-linked but also cannot-linked!"
-            )
-        # cl_forbidden[root_a].add(root_b)
-        # cl_forbidden[root_b].add(root_a)
-
-    # Step 4: Compute original neighborhoods
-    nbrs = NearestNeighbors(radius=eps, metric=metric).fit(X)
-    neighborhoods = nbrs.radius_neighbors(X, return_distance=False)
-
-    # Compute core_samples (including must-linked points)
-    is_core = np.zeros(n_samples, dtype=bool)
-    for i in range(n_samples):
-        # Get all density neighbors
-        density_neighbors = set(neighborhoods[i])
-        # Add all must-linked points (transitive closure)
-        for j in range(n_samples):
-            if uf.find(j) == uf.find(i):
-                density_neighbors.add(j)
-        neighborhoods[i] = density_neighbors
-        # Core if combined set is large enough
-        is_core[i] = len(density_neighbors) >= min_samples
-
-    # Step 5: Cluster with constraints
-    labels = np.full(n_samples, -1)
-    cluster_id = 0
-
-    # Problem: already merged cluster might not have cl_pairs but when a new ml point needs to be added,
-    # it might violate cl constraint.
-
-    for i in range(n_samples):
-        if labels[i] != -1 or not is_core[i]:
-            continue  # (Label already assigned) or (is only reachable but is not a core point)
-        # Start new cluster with must-linked points
-        # Seed = must-links + self
-        seeds = {j for j in range(n_samples) if root[j] == root[i]}
-        # Expand cluster
-        while seeds:
-            p = seeds.pop()
-            if labels[p] == -1:
-                labels[p] = cluster_id  # Assign cluster ID even if not a core point
-                if is_core[p]:  # Expand only if p is core (per DBSCAN rules)
-                    # Add density-connected points (if no cannot-link violation)
-                    for q in neighborhoods[p]:
-                        # if labels[q] == -1 and uf.find(q) not in cl_forbidden.get(uf.find(p), set()):
-                        if (
-                            labels[q] == -1
-                            and (p, q) not in cl_pairs
-                            and (q, p) not in cl_pairs
-                        ):
-                            # Check if q's closure is forbidden with any point in cluster
-                            valid = True
-                            for clust_member in np.where(labels == cluster_id)[0]:
-                                for ml_member in {
-                                    j for j in range(n_samples) if root[j] == root[q]
-                                }:
-                                    if (ml_member, clust_member) in cl_pairs or (
-                                        clust_member,
-                                        ml_member,
-                                    ) in cl_pairs:
-                                        valid = False
-                                        break
-                                if not valid:
-                                    break
-                                # if uf.find(q) in cl_forbidden.get(uf.find(clust_member), set()):
-                                #     valid = False
-                                #     break
-                            if valid:
-                                seeds.add(q)
-                                uf.union(p, q)
-                                # if root[p] != uf.find(p) and len(cl_forbidden.get(root[p], set())) > 0:
-                                #     cl_forbidden[uf.find(p)].update(cl_forbidden.get(root[p], set()))
-                                #     cl_forbidden[uf.find(p)].add(uf.find(p))
-                                #     cl_forbidden[root[q]].add(uf.find(p))
-                                # if root[q] != uf.find(q) and len(cl_forbidden.get(root[q], set())) > 0:
-                                #     cl_forbidden[uf.find(q)].update(cl_forbidden.get(root[q], set()))
-                                #     cl_forbidden[uf.find(q)].add(uf.find(q))
-                                #     cl_forbidden[root[p]].add(uf.find(q))
-        cluster_id += 1
-
-    # Sanity check for constraints
-    for a, b in ml_pairs:
-        if labels[a] != labels[b]:
-            print(f"{a}, {b}, {labels[[a, b]]}")
-            break
-        assert (
-            labels[a] == labels[b]
-        ), "must-link constraint violated. Implementation error"
-    for a, b in cl_pairs:
-        if labels[a] == labels[b] and labels[a] != -1:
-            print(f"{a}, {b}, {labels[[a, b]]}")
-        assert (
-            labels[a] != labels[b] or labels[a] == -1
-        ), "cannot-link constraint violated. Implementation error"
-    return labels
 
 
 def FINCH(
@@ -1040,7 +808,6 @@ def get_model(model_name, eval=True, combined=False, drop_rate=0.2):
 
 def load_checkpoint(megadescriptor_model, folder):
     if os.path.exists(folder):
-        print(folder, os.listdir(folder))
         checkpoint_file = os.listdir(folder)
         if len(checkpoint_file) > 0:
             checkpoint_file = [f for f in checkpoint_file if f.startswith("best")][0]
@@ -1088,31 +855,6 @@ class ClusterLoss(nn.Module):
         self.linear.weight[cluster_idx].copy_(centroid)
 
 
-class LinkPredictionLoss(nn.Module):
-    """
-    CE with single dense layer classification head.
-
-    Args:
-        num_classes (int): Number of classes.
-        embedding_size (int): Size of the input embeddings.
-    """
-
-    def __init__(self, metric="cosine"):
-        super().__init__()
-        self.metric = metric
-
-    def forward(self, features, ml, cl):
-        pairwise_distances = metrics.pairwise.pairwise_distances(
-            features, features, metric=self.metric
-        )
-        return (
-            pairwise_distances[ml[:, 0], ml[:, 1]].mean()
-            + 2
-            - pairwise_distances[cl[:, 0], cl[:, 1]].mean()
-        )
-
-    def reset_weights(self, centroid, cluster_idx):
-        self.linear.weight[cluster_idx].copy_(centroid)
 
 
 def unfurl(list_of_dicts):
@@ -1400,48 +1142,8 @@ def compute_predictions(
         return idx_true, idx_pred
 
 
-def compute_baks_baus(
-    df, y_pred, new_individual="", col_label="identity", col_split="split"
-):
-    baks = {}
-    baus = {}
-    y_true = df[col_label].to_numpy()
-    for dataset, df_dataset in df.groupby("dataset"):
-        identity_train = df_dataset[col_label][
-            df_dataset[col_split] == "train"
-        ].to_numpy()
-        identity_test = df_dataset[col_label][
-            df_dataset[col_split] == "test"
-        ].to_numpy()
-        identity_test_only = list(set(identity_test) - set(identity_train))
-        idx = df.index.get_indexer(df_dataset.index[df_dataset[col_split] == "test"])
-        baks[dataset] = metrics.BAKS(y_true[idx], y_pred[idx], identity_test_only)
-        baus[dataset] = metrics.BAUS(
-            y_true[idx], y_pred[idx], identity_test_only, new_individual
-        )
-    return baks, baus
 
 
-def predict(df, features, col_label="identity", col_split="split"):
-    y_pred = np.full(len(df), np.nan, dtype=object)
-    similarity_pred = np.full(len(df), np.nan, dtype=object)
-    for dataset_name in df["dataset"].unique():
-        idx_train = np.where(
-            (df["dataset"] == dataset_name) * (df[col_split] == "train")
-        )[0]
-        idx_test = np.where(
-            (df["dataset"] == dataset_name) * (df[col_split] == "test")
-        )[0]
-
-        idx_true, idx_pred, similarity = compute_predictions(
-            features[idx_test], features[idx_train], return_similarity=True
-        )
-        idx_true = idx_test[idx_true]
-        idx_pred = idx_train[idx_pred]
-
-        y_pred[idx_true] = df[col_label].iloc[idx_pred[:, 0]].values
-        similarity_pred[idx_true] = similarity[:, 0]
-    return y_pred, similarity_pred
 
 
 def unify_types(
@@ -1566,6 +1268,20 @@ def _json_default(o):
     raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
 
+def _subset_name(dataset):
+    """Name of the wildlife subset, for either dataset class.
+
+    The repo-root `WildlifeDatasets` sets `self.dataset`; the SpCL `Wildlife` sets
+    `self.subset`. Neither sets both, so this is unambiguous -- and it is the single
+    semantic difference that kept these two modules forked (Todo.md C3).
+    """
+    for attr in ("dataset", "subset"):
+        v = getattr(dataset, attr, None)
+        if v is not None:
+            return v
+    raise AttributeError("dataset object exposes neither .dataset nor .subset")
+
+
 def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
     import evaluation
     import copy
@@ -1598,7 +1314,7 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
     new_individual = "new_individual"
 
     # run on each dataset
-    if dataset.dataset != "WII":
+    if _subset_name(dataset) != "WII":
         # also get micro-averaged results
         default_query_features = megadescriptor_extractor(dataset.default_query)
         default_gallery_features = megadescriptor_extractor(dataset.default_gallery)
@@ -1676,7 +1392,7 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         print(f"ROC AUC score = {roc_score}")
 
         print(
-            f"{dataset.dataset},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
+            f"{_subset_name(dataset)},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
         )
 
         micro_results = {
@@ -1938,7 +1654,7 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         print(f"ROC AUC score = {roc_score}")
 
         print(
-            f"{dataset.dataset},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
+            f"{_subset_name(dataset)},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
         )
 
         results = {
@@ -1963,11 +1679,10 @@ def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
 
 """ Borrowed from Zhong et al. (https://github.com/yxgeee/SpCL) """
-import os, sys
+import os
 import time
 import numpy as np
 from scipy.spatial.distance import cdist
-import gc
 import faiss
 
 import torch

@@ -16,7 +16,7 @@ class BaseSampling:
         n_samples = len(gt_labels)
         if self.args.dataset == "wildlife":
             total_edges = (n_samples * (n_samples - 1)) // 2
-            self.n = int(total_edges * 0.02/100)
+            self.n = int(total_edges * 0.02 / 100)
         else:
             self.n = np.unique(gt_labels).shape[0]
 
@@ -40,7 +40,7 @@ class BaseSampling:
         self.ml_pairs = ml_pairs
         self.cl_pairs = cl_pairs
         self.all_selected_pairs = set(frozenset(pair) for pair in ml_pairs + cl_pairs)
-    
+
     def compute_selected_gt_identity_counts(self):
         counts_by_id = {}
         for pair in self.all_selected_pairs:
@@ -60,7 +60,6 @@ class BaseSampling:
                 counts_by_id[pair0id] += 1
                 counts_by_id[pair1id] += 1
 
-            
         return counts_by_id
 
     def compute_selected_pseudo_identity_counts(self):
@@ -84,16 +83,19 @@ class BaseSampling:
                     counts_by_id[pair0id] += 1
                     counts_by_id[pair1id] += 1
         except KeyError:
-            print("KeyError: 'pseudo_identity' not found in metadata. Returning empty counts.")
+            print(
+                "KeyError: 'pseudo_identity' not found in metadata. Returning empty counts."
+            )
             return {}
 
-            
         return counts_by_id
-    
 
     def set_memory_bank(self, features):
         features = torch.Tensor(features)
         self.memory_bank = features / torch.linalg.norm(features, dim=1)[:, None]
 
     def batch_memory_bank_update(self, batch_features, batch_indices, momentum=0.2):
-        self.memory_bank[batch_indices] = momentum * self.memory_bank[batch_indices] + (1 - momentum) * batch_features.detach().cpu().numpy()
+        self.memory_bank[batch_indices] = (
+            momentum * self.memory_bank[batch_indices]
+            + (1 - momentum) * batch_features.detach().cpu().numpy()
+        )

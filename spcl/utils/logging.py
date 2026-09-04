@@ -2,7 +2,6 @@ from __future__ import absolute_import
 import os
 import sys
 
-from .osutils import mkdir_if_missing
 
 
 class Logger(object):
@@ -10,7 +9,7 @@ class Logger(object):
         self.console = sys.stdout
         self.file = None
         if fpath is not None:
-            mkdir_if_missing(os.path.dirname(fpath))
+            os.makedirs(os.path.dirname(fpath), exist_ok=True)
             self.file = open(fpath, "w")
 
     def __del__(self):

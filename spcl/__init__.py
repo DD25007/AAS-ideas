@@ -7,4 +7,4 @@ from . import utils
 from . import evaluators
 from . import trainers
 
-__version__ = '0.1.0'
+__version__ = "0.1.0"

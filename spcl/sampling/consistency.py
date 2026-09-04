@@ -1,14 +1,11 @@
 from .base import BaseSampling
 import numpy as np
 from spcl.utils.constrained_clustering import constrained_clustering
-from sklearn import metrics
 import networkx as nx
 import itertools
-from scipy.special import log_softmax, softmax
 from collections import defaultdict
 from sklearn.cluster import DBSCAN
 from spcl.utils.constrained_clustering import FINCH
-from itertools import combinations
 
 
 def compute_var(F_vectors):

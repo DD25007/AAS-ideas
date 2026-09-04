@@ -1500,7 +1500,43 @@ pynndescent. Add `pynndescent` to requirements before scaling up. See also item 
 
 ---
 
-## 13. `--skyline` cannot run as shipped — MAKESHIFT WORKAROUND IN PLACE
+## 13. `--skyline` — makeshift, and a concrete cause found 2026-09-04
+
+> ### `CustomTrainer` does not scale the loss for gradient accumulation
+>
+> `CustomTrainer.train_epoch` (utils.py) diverges from the `BasicTrainer.train_epoch` it
+> overrides, in three ways:
+>
+> | | BasicTrainer (wildlife-tools) | CustomTrainer (this repo) |
+> |---|---|---|
+> | loss | `loss_scaled = loss / accumulation_steps` then `.backward()` | `loss.backward()` — **unscaled** |
+> | step condition | `(i + 1) % accumulation_steps == 0` | `(i - 1) % accumulation_steps == 0` |
+> | epoch end | steps leftover gradients | **drops them** |
+>
+> The first is the substantive one: with `accumulation_steps=2` (what `main.py` passes), two
+> unscaled backward passes accumulate before each step, so **the effective gradient is 2x
+> what the same configuration would produce under `BasicTrainer`** — equivalent to doubling
+> the learning rate.
+>
+> That is a plausible mechanical cause for the skyline **overshooting** the paper on every
+> closed-set metric (+1.6 mAP at 30 epochs, +4.3 at 50, +5.0 Top-1) while **undershooting**
+> AUC ROC by 3.2–5.5. Over-training sharpens known-identity separation and degrades the
+> known-vs-unknown margin AUC ROC measures — the sign pattern matches.
+>
+> The step-condition difference happens to be harmless at `accumulation_steps=2`
+> (both fire on odd `i`), but diverges for any other value — checked for 1..4.
+>
+> ### Why it is still not fixed
+>
+> Switching the skyline to `BasicTrainer`, or adding the loss scaling, would change the
+> skyline numbers — so it needs its own parity run and a decision about which behaviour the
+> paper's 64.29 mAP actually corresponds to. Given the skyline already overshoots, scaling
+> the loss is the more likely match, and that is now a testable hypothesis rather than a
+> guess.
+>
+> The original blocker stands as before: `CustomTrainer` re-clusters at the end of every
+> epoch and overwrites the ground-truth labels, killing supervised training at epoch 1. The
+> `update_pseudo_labels=False` guard works around it.
 
 **Priority: the Table 1 "ResNet-50 (Skyline)" row (64.29% mAP) is currently NOT
 reproducible. Treat any skyline number we produce as indicative only.**

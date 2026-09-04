@@ -252,11 +252,13 @@ them. Full reasoning in `Todo.md`.
 
 | File                                 | change                                                                                                           | why                                                                                                                     |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `requirements.txt`                   | pin `finch-clust==0.2.1`                                                                                         | 0.2.2+ silently breaks AAS (item 1)                                                                                     |
-| `train_al.py`                        | `model.to('cuda:0')` after eval; samplers imported from `spcl.sampling`                                          | wildlife-tools leaves the model on CPU (item 11); the old `sampling` shadowing is now structurally impossible (item 12) |
-| `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat`                                                                              | corrupts the NIS estimate (W1)                                                                                          |
-| `main.py`                            | skyline label mode + `extra_classes`; `get_evaluation_results` epoch arg; `run_suffix` entries for ImageNet Swin | items 13a/13b, 16                                                                                                       |
-| `utils.py`                           | `update_pseudo_labels` flag on `CustomTrainer`                                                                   | stops per-epoch re-clustering destroying skyline labels (item 13c)                                                      |
+| `requirements.txt` | pin `finch-clust==0.2.1`, `transformers<5` | 0.2.2+ silently breaks AAS (item 1); transformers 5.x breaks MiewID's `trust_remote_code` loader (item 14) |
+| `scripts/common.sh` | `PYTHONHASHSEED=0`, `LD_LIBRARY_PATH`, thread caps | **AL runs were not reproducible**: the AAS sampler iterates `nx.connected_components()` over string-named nodes, so per-process string hashing changed which pairs it selected (R6). The other two were never applied by the launchers at all (R5, item 8) |
+| `train_al.py` | `model.to('cuda:0')` after eval; `spcl.sampling` imports; `cudnn.benchmark` off; `manual_seed_all`; unknown-sampler guard | wildlife-tools leaves the model on CPU (item 11); two branches called names that were never imported; a typo in `-s` silently ran plain USL under an AL row's name |
+| `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat` | corrupts the NIS estimate (W1) |
+| `main.py` | skyline label mode + `extra_classes`; `get_evaluation_results` epoch arg; `run_suffix` now slugifies | items 13a/13b, 16 |
+| `utils.py` | `update_pseudo_labels` flag; `_subset_name()` shim; `Normalized Accuracy@0.7` fix; NEP 50 float casts | item 13c; C3 merge; the metric computed `sqrt(BAKS*BAKS)` in all six dicts; numpy 2 keeps `float32` where numpy 1 gave `float64` |
+| `gallery_cache.py` (new) | caches the gallery selection **and its RNG state** | O4; the first version desynchronised `np.random` between cache hit and miss, which broke the AL ranking until fixed |
 
 The `main.py` foundation-row bypass has been **reverted** — the ImageNet-Swin
 substitution it disabled is what the published numbers went through (item 15). The repo is

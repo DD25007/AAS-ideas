@@ -1412,7 +1412,45 @@ Fix: guard explicitly, e.g. `if n_bar > 0 and Q[v_i] > 0:` before accumulating, 
 the bare `except`. Note this affects the **NIS baseline row** of Table 1, so any NIS number
 produced before this is fixed should be treated as suspect.
 
-## W2. `balanced.py:86` — LBAS cannot fill its annotation budget
+## W2. LBAS cannot fill its budget — MEASURED 2026-09-04 (and it verifies two paper claims)
+
+> Counted across the full 24-run grid (4 seeds x 5 cycles = 20 opportunities per method):
+>
+> | sampler | "pool too small" | "budget unspent" |
+> |---|---|---|
+> | random / GBAS / NIS | 0 | 0 |
+> | **LBAS** | **20 / 20** | 0 |
+> | **AAS** | 0 | **20 / 20** |
+>
+> **LBAS hits an insufficient triplet pool in every cycle of every seed.** Its warning
+> carries no count, so the shortfall cannot be quantified from the logs -- but a sampler that
+> never fills its allowance is not being compared at the same budget as random/GBAS/NIS,
+> which spend theirs in full. The paper does not report this. Quantifying it needs
+> instrumentation in `spcl/sampling/balanced.py`.
+>
+> ### AAS: the paper's efficiency claim reproduces almost exactly
+>
+> AAS's message *does* carry the unspent count, so its true spend is recoverable. With
+> n=20565 -> 211,449,330 possible pairs, budget 42,289/cycle (0.02%), cap 211,445 (0.1%):
+>
+> | seed | c1 | c2 | c3 | c4 | c5 | total |
+> |---|---|---|---|---|---|---|
+> | s1 | 42,284 | 10,348 | 7,493 | 4,781 | 2,856 | 67,762 |
+> | s2 | 42,285 | 10,952 | 7,498 | 4,012 | 2,478 | 67,225 |
+> | s3 | 42,285 | 10,640 | 10,912 | 4,276 | 2,678 | 70,791 |
+> | s4 | 42,285 | 10,974 | 7,064 | 4,166 | 2,802 | 67,291 |
+>
+> - **Mean spend 68,267 pairs = 0.032% of all pairs.** The paper claims **0.033%**. Independently
+>   reproduced from our own runs, not copied from the text.
+> - **32.3% of the 0.1% cap** -- i.e. AAS reaches its accuracy while declining two thirds of
+>   the annotation it is allowed.
+> - **Spend falls monotonically across cycles** (42k -> 11k -> 7k -> 4k -> 3k) in every seed,
+>   matching the paper's Fig. 3 observation that "the budget utilized by AAS in each AL cycle
+>   reduces as the training progresses" -- pseudo-labels start noisy and need more
+>   supervision.
+>
+> So the paper's efficiency claim holds up. The like-for-like concern applies to **LBAS**,
+> not to AAS: AAS under-spends by design and reports it, LBAS under-spends silently.
 
 Hit by `combined_LBAS_s1` and `combined_LBAS_s3` (twice each — i.e. in both AL cycles
 those runs reached).
@@ -1440,7 +1478,20 @@ inference and warns. Harmless today but it makes the parse slower and the dtype
 non-deterministic across pandas versions. Fix: pass an explicit `dtype=` for that column,
 or `low_memory=False`.
 
-## W4. `pynndescent not installed`
+## ~~W4. `pynndescent not installed`~~ — NON-ISSUE 2026-09-04
+
+> finch-clust only reaches its ANN path when the input exceeds `use_ann_above_samples`,
+> which this codebase sets to **70,000**. The dataset is **n = 20,565**, so FINCH always
+> takes the exact nearest-neighbour path and `pynndescent` is never called. The warning is
+> printed at import time regardless, which is why it looked relevant.
+>
+> Confirmed in the library source: the missing import only becomes fatal above the
+> threshold, where it raises `MemoryError("You should use pynndescent for inputs larger
+> than ...")`. Below it, results are unaffected.
+>
+> **Do not install it to silence the warning** -- switching FINCH onto an approximate
+> neighbour search would change the clustering, and therefore every AAS number. It was
+> briefly a suspect for R6; that turned out to be `PYTHONHASHSEED` instead.
 
 Emitted by finch. Inert at the current scale: `use_ann_above_samples=70000` and
 n = 20,565, so the exact path is taken. It becomes a hard failure if a future run exceeds
@@ -1537,7 +1588,34 @@ all AL concepts that a fully-supervised run should never touch.
 
 ---
 
-## 14. transformers 5.x breaks MiewID — BLOCKING, NOT FIXED
+## ~~14. transformers 5.x breaks MiewID~~ — REPRODUCED 2026-09-04
+
+> **The MiewID foundation row is reproduced, and it is the closest row in the whole table.**
+>
+> | metric | ours (4 seeds) | paper | delta |
+> |---|---|---|---|
+> | **mAP** | **41.38 ±0.06** | 41.16 | **+0.22** |
+> | mINP | 20.14 ±0.41 | 21.08 | −0.94 |
+> | BAKS | 58.63 ±0.54 | 57.04 | +1.59 |
+> | AUC ROC | 64.55 ±0.28 | 63.72 | +0.83 |
+> | Top-1 | 57.89 ±0.55 | 56.41 | +1.48 |
+> | Top-5 | 76.77 ±0.92 | 76.63 | +0.14 |
+>
+> Every metric within ±1.6, mAP within 0.22, and seed spread of only ±0.06 on mAP.
+>
+> **Fix:** a `hitl-miewid` env (clone of `hitl` + `transformers<5`, resolved to 4.57.6).
+> The model loads via `trust_remote_code` and its modelling code predates the 5.x loader,
+> which calls `all_tied_weights_keys` where the remote code defines `_tied_weights_keys`.
+> Nothing in this repo needed changing — it was purely a version constraint, exactly as
+> diagnosed.
+>
+> `scripts/run_row.sh miewid <seed> <gpu> <out>` now runs the row, gated on a
+> transformers-4.x check that fails with a clear message rather than the original
+> `AttributeError`. Requires
+> `PYTHON=/storage/dd25007/conda_envs/hitl-miewid/bin/python`.
+>
+> **`requirements.txt` should pin `transformers>=4.30.2,<5`** — the unbounded `>=4.30.2` is
+> what let 5.x in, the same class of failure as item 1 (finch).
 
 **The MiewID foundation row of Table 1 was not reproduced.**
 
@@ -1614,9 +1692,21 @@ fixed code, `+ NIS` still lands at **48.84 mAP vs the paper's 50.72 (−1.88)**,
 other AL row sits at −0.36 to −1.40. Seed std is 0.70, so the extra ~0.5–1.0 point is
 outside noise. The corrupted `f_hat` was therefore **not** the whole story for that row.
 
-Worth checking next: whether `Q[v_i]` and the proposal distribution `q` match the NIS paper
-(Perez et al., ECCV 2024), and whether `--sampling_ratio` (default 1.0) is the value the
-authors used — it is exposed in `utils.py` but never mentioned in the paper.
+**Narrowed 2026-09-04.** Two candidates eliminated, one concrete lead found:
+
+- **Not a budget problem.** Across all 4 seeds x 5 cycles, NIS emits **zero** "pool too
+  small" and **zero** "budget unspent" warnings -- it spends its full 42,289 pairs/cycle,
+  unlike LBAS (20/20 short) and AAS (deliberately 32%). So the shortfall is in *which* pairs
+  it picks, not how many.
+- **`--sampling_ratio` never reaches the sampler.** `train_al.py:228` hardcodes
+  `CountingClusters(ratio=1.0, args=args)`, so the CLI argument exposed in `utils.py` is
+  dead on the AL path. With `ratio=1.0`, `Nv = ceil(sqrt(n/ratio)) = 206` vertices x ~206
+  neighbours -- a balanced split. If the NIS paper uses an unbalanced vertex/neighbour
+  allocation, this is exactly where that difference would live, and it is currently
+  unreachable without editing the source.
+
+Still to check against Perez et al. (ECCV 2024): whether `Q[v_i]` and the proposal
+distribution `q` match, and whether a balanced `Nv x Nn` split is what they specify.
 
 ---
 

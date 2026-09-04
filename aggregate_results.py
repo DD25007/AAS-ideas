@@ -114,6 +114,9 @@ PAPER = {
         "Top-5": 85.04,
         "Top-10": 91.18,
     },
+    ("table1", "miewid"):
+                      {"mAP": 41.16, "mINP": 21.08, "BAKS": 57.04, "AUC ROC": 63.72,
+                       "Top-1": 56.41, "Top-3": 69.88, "Top-5": 76.63, "Top-10": 85.28},
     ("table1", "resnet50_baseline"): {
         "mAP": 38.88,
         "mINP": 21.34,
@@ -158,6 +161,7 @@ for _k in (
 TABLE1_ROWS = [
     ("resnet50_baseline", "ResNet-50 (Baseline)"),
     ("swin_foundation", "Foundation row (ImageNet Swin-L)"),
+    ("miewid", "MiewID (foundation)"),
     ("resnet50_skyline_e30_zerobased", "Skyline, 30 ep, zerobased"),
     ("resnet50_skyline_e30_offset", "Skyline, 30 ep, offset"),
     ("resnet50_skyline_e50_zerobased", "Skyline, 50 ep, zerobased"),

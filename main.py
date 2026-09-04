@@ -3,6 +3,7 @@ from sampling.counting_clusters import CountingClusters
 from sampling.fps import FPS
 from utils import *
 import os
+import re
 import numpy as np
 import json
 import pandas as pd
@@ -336,26 +337,24 @@ def main(args):
     )
     database = dataset.get_train_loader()
 
-    if args.model_name == "hf-hub:BVRA/MegaDescriptor-T-224":
-        run_suffix = "mdt"
-    elif args.model_name == "hf-hub:BVRA/MegaDescriptor-L-224":
-        run_suffix = "mdl"
-    elif args.model_name == "resnet50":
-        run_suffix = "r50"
-    elif args.model_name == "resnet18":
-        run_suffix = "r18"
-    elif args.model_name == "conservationxlabs/miewid-msv2":
-        run_suffix = "miewid"
-    # Added: the plain ImageNet Swin backbones that get_model substitutes for
-    # MegaDescriptor when --dataset combined (utils.py:923). Needed to evaluate that
-    # substituted model directly, e.g. to check whether the paper's foundation row is
-    # really ImageNet Swin rather than MegaDescriptor.
-    elif args.model_name == "swin_large_patch4_window7_224":
-        run_suffix = "swinL_in"
-    elif args.model_name == "swin_tiny_patch4_window7_224":
-        run_suffix = "swinT_in"
-    else:
-        raise NotImplementedError
+    # Short tag for the output directory. The known backbones keep their historical tags
+    # so existing result paths stay valid; anything else is slugified rather than rejected.
+    # This used to be a whitelist ending in `raise NotImplementedError`, which failed before
+    # the dataset was even built -- including for the ImageNet Swin models `get_model` itself
+    # substitutes (Todo.md item 16).
+    _KNOWN_SUFFIX = {
+        "hf-hub:BVRA/MegaDescriptor-T-224": "mdt",
+        "hf-hub:BVRA/MegaDescriptor-L-224": "mdl",
+        "resnet50": "r50",
+        "resnet18": "r18",
+        "conservationxlabs/miewid-msv2": "miewid",
+        "swin_large_patch4_window7_224": "swinL_in",
+        "swin_tiny_patch4_window7_224": "swinT_in",
+    }
+    run_suffix = _KNOWN_SUFFIX.get(args.model_name)
+    if run_suffix is None:
+        run_suffix = re.sub(r"[^A-Za-z0-9._-]+", "_", args.model_name.split("/")[-1]).strip("_")
+        print(f"[run_suffix] unknown backbone {args.model_name!r} -> tag {run_suffix!r}")
 
     use_combined_dataset = args.dataset == "combined"
     # NOTE(foundation-rows): get_model(combined=True) swaps MegaDescriptor-L-224 for a plain

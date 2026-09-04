@@ -14,7 +14,7 @@
 #                              FINCH partition and therefore every AAS number.
 
 timm>=0.9.2
-transformers>=4.30.2
+transformers>=4.30.2,<5  # 5.x breaks MiewID's trust_remote_code loader (Todo.md item 14)
 numpy>=2
 scipy>=1.14
 pandas>=1.1.4,<3

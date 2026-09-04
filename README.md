@@ -98,6 +98,7 @@ Not a Table 1 row, but measured for comparison:
 | Model                              | n   | mAP         | mINP  | BAKS  | AUC ROC | Top-1 | Top-5 |
 | ---------------------------------- | --- | ----------- | ----- | ----- | ------- | ----- | ----- |
 | MegaDescriptor-L-224, real weights | 4   | 53.34 ±0.16 | 32.86 | 67.90 | 68.30   | 67.78 | 85.91 |
+| MiewID (foundation) | 4   | **41.38** ±0.06 | 20.14 | 58.63 | 64.55   | 57.89 | 76.77 |
 
 This row is a **side experiment, not a Table 1 row**: it exists only to confirm that the
 paper's "MegaDescriptor" row is really ImageNet Swin-L. It is also no longer reproducible —
@@ -142,10 +143,10 @@ MegaDescriptor-L-224 whenever `--dataset combined`, commented
 | ImageNet Swin-L (the substitution) | **−1.19** | **+0.16** | **+0.62** |
 | MegaDescriptor, real weights       | +7.69     | +11.31    | +4.18     |
 
-(MiewID, the other foundation row, was not reproduced: the code expects
-`conservationxlabs/miewid-msv2` via `trust_remote_code`, whose remote code targets
-transformers 4.x, while this env has 5.16.1 -> `AttributeError: 'MiewIdNet' object has no
-attribute 'all_tied_weights_keys'`. See `Todo.md`.)
+(MiewID, the other foundation row, **is** reproduced — 41.38 vs the paper's 41.16, the
+closest row in the table. It needs transformers 4.x: the model loads via
+`trust_remote_code` and its modelling code predates the 5.x loader. Run it with the
+`hitl-miewid` env; `Todo.md` item 14.)
 
 **ResNet-50 Baseline reproduces to −0.37 mAP / −0.10 Top-1.** This is the load-bearing
 result: it uses no training at all, so it isolates the ≈1-point deficit on the trained
@@ -241,7 +242,6 @@ passed silently and produced non-comparable numbers.
 
 | Table 1 row                                                         | why                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MiewID** (foundation)                                             | Loads via `trust_remote_code`; its modelling code targets transformers 4.x but the env has 5.16.1 → `AttributeError: 'MiewIdNet' object has no attribute 'all_tied_weights_keys'`. Fix is a transformers 4.x pin — `Todo.md` item 14. |
 | **USL block** — ICE, PPLR, ClusterContrast, RTMem, PurificationReID | Never ported to wildlife by the authors. Only RTMem exists in this repo's git history with a wildlife adapter (deleted at `56c6fe6`, recoverable). `Todo.md` has the porting recipe reconstructed from it.                            |
 | **ResNet-50 (Skyline)**                                             | Runs only via a makeshift workaround; the shipped path cannot train past epoch 1. Numbers above are indicative, not a reproduction — `Todo.md` item 13.                                                                               |
 

@@ -49,11 +49,16 @@ Use `megadescriptor` for the actual Table 1 row.
 MSG
     exit 2 ;;
 
+  # Table 1's MiewID foundation row. Needs transformers 4.x: the model is loaded via
+  # trust_remote_code and its modelling code predates the 5.x loader (Todo.md item 14).
+  # Run with PYTHON=/storage/dd25007/conda_envs/hitl-miewid/bin/python
   miewid)
-    echo "run_row.sh: the miewid row is blocked by transformers 5.x (Todo.md item 14)." >&2
-    echo "Its remote code targets transformers 4.x: 'MiewIdNet' object has no attribute" >&2
-    echo "'all_tied_weights_keys'. Needs a transformers 4.x pin first." >&2
-    exit 2 ;;
+    if ! "$PYTHON" -c "import transformers,sys; sys.exit(0 if int(transformers.__version__.split('.')[0])<5 else 1)" 2>/dev/null; then
+      echo "run_row.sh: the miewid row needs transformers 4.x; this PYTHON has 5.x." >&2
+      echo "  use PYTHON=/storage/dd25007/conda_envs/hitl-miewid/bin/python" >&2
+      exit 2
+    fi
+    ARGS="--baseline --model_name conservationxlabs/miewid-msv2" ;;
 
   *) echo "run_row.sh: unknown row '$ROW'" >&2; exit 2 ;;
 esac

@@ -6,6 +6,35 @@ import itertools
 from collections import defaultdict
 from sklearn.cluster import DBSCAN
 from spcl.utils.constrained_clustering import FINCH
+import os
+
+# Todo.md R6: this sampler turns sets of *string*-named graph nodes (f'dbscan-{i}',
+# f'finch-{j}') into ordered lists. Python randomises string hashing per process unless
+# PYTHONHASHSEED is fixed, so that order -- and therefore which coarse cluster S_k the
+# annotation budget runs out on -- varies run to run. The launcher pins PYTHONHASHSEED=0;
+# HITL_SORT_COMPONENTS=1 fixes it in the code instead, so the sampler is reproducible
+# regardless of how it is invoked. Default off: enabling it picks a different (but equally
+# valid) component order than PYTHONHASHSEED=0, so it must not silently move published
+# numbers.
+_SORT_COMPONENTS = os.environ.get("HITL_SORT_COMPONENTS", "0") == "1"
+
+
+def _node_key(node):
+    """Sort key for 'dbscan-12' / 'finch-3' that orders numerically, not lexically."""
+    prefix, _, idx = node.rpartition("-")
+    return (prefix, int(idx))
+
+
+def _ordered(nodes):
+    """Sorted list when the fix is on; otherwise the original unordered set."""
+    return sorted(nodes, key=_node_key) if _SORT_COMPONENTS else set(nodes)
+
+
+def _ordered_components(graph):
+    comps = nx.connected_components(graph)
+    if not _SORT_COMPONENTS:
+        return comps
+    return sorted((sorted(c, key=_node_key) for c in comps), key=lambda c: _node_key(c[0]))
 
 
 def compute_var(F_vectors):
@@ -108,11 +137,13 @@ class ConsistencySampling(BaseSampling):
 
             S = []  # List of coarse clusters S_k's
             inconsistent_dbscan_labels, inconsistent_finch_labels = [], []
-            for i, c in enumerate(nx.connected_components(inconsistency_graph)):
+            for i, c in enumerate(_ordered_components(inconsistency_graph)):
                 S_k = inconsistency_graph.subgraph(c).copy()
                 S.append(nx.create_empty_copy(S_k))
-                dbscan_nodes = {n for n, d in S_k.nodes(data=True) if d["bipartite"] == 0}
-                finch_nodes = set(S_k) - dbscan_nodes
+                dbscan_nodes = _ordered(
+                    n for n, d in S_k.nodes(data=True) if d["bipartite"] == 0
+                )
+                finch_nodes = _ordered(set(S_k) - set(dbscan_nodes))
                 inconsistent_dbscan_labels.append(list(int(dn.split('-')[1]) for dn in dbscan_nodes))
                 inconsistent_finch_labels.append(list(int(fn.split('-')[1]) for fn in finch_nodes))
 
@@ -151,7 +182,7 @@ class ConsistencySampling(BaseSampling):
                 finch_positive_relations = []
                 potential_queries = None
                 # The following loop iterates twice. Once for DBSCAN and once for FINCH.
-                for c in nx.connected_components(S_k):
+                for c in _ordered_components(S_k):
                     G = S_k.subgraph(c).copy()
                     if 'dbscan' in list(G.nodes)[0]:
                         for node in G.nodes:

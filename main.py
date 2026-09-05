@@ -353,8 +353,12 @@ def main(args):
     }
     run_suffix = _KNOWN_SUFFIX.get(args.model_name)
     if run_suffix is None:
-        run_suffix = re.sub(r"[^A-Za-z0-9._-]+", "_", args.model_name.split("/")[-1]).strip("_")
-        print(f"[run_suffix] unknown backbone {args.model_name!r} -> tag {run_suffix!r}")
+        run_suffix = re.sub(
+            r"[^A-Za-z0-9._-]+", "_", args.model_name.split("/")[-1]
+        ).strip("_")
+        print(
+            f"[run_suffix] unknown backbone {args.model_name!r} -> tag {run_suffix!r}"
+        )
 
     use_combined_dataset = args.dataset == "combined"
     # NOTE(foundation-rows): get_model(combined=True) swaps MegaDescriptor-L-224 for a plain

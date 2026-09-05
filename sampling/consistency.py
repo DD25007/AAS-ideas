@@ -8,6 +8,40 @@ from scipy.stats import entropy
 from scipy.special import log_softmax, softmax
 from sklearn.metrics import silhouette_score
 from collections import defaultdict
+import os
+
+# Todo.md R6, ported from spcl/sampling/consistency.py 2026-09-05. Same defect, same fix:
+# this sampler turns sets of *string*-named graph nodes into ordered lists, and Python
+# randomises string hashing per process unless PYTHONHASHSEED is fixed, so the order the
+# annotation budget is spent in varies run to run. `scripts/common.sh` pins
+# PYTHONHASHSEED=0; HITL_SORT_COMPONENTS=1 fixes it in the code instead.
+#
+# This copy is the one `main.py` imports (`train_al.py` imports the spcl one). Keeping the
+# two in sync matters -- W1 was fixed in the spcl copy on 2026-09-02 and sat unfixed here
+# until 2026-09-05 precisely because nobody checked both.
+#
+# Default off: sorting picks a different (equally valid) order than PYTHONHASHSEED=0, so
+# turning it on would move published numbers.
+_SORT_COMPONENTS = os.environ.get("HITL_SORT_COMPONENTS", "0") == "1"
+
+
+def _node_key(node):
+    """Sort key for 'dbscan-12' / 'finch-3' that orders numerically, not lexically."""
+    prefix, _, idx = node.rpartition("-")
+    return (prefix, int(idx))
+
+
+def _ordered(nodes):
+    """Sorted list when the fix is on; otherwise the original unordered set."""
+    return sorted(nodes, key=_node_key) if _SORT_COMPONENTS else set(nodes)
+
+
+def _ordered_components(graph):
+    comps = nx.connected_components(graph)
+    if not _SORT_COMPONENTS:
+        return comps
+    return sorted((sorted(c, key=_node_key) for c in comps), key=lambda c: _node_key(c[0]))
+
 
 
 class ConsistencySampling(BaseSampling):
@@ -142,11 +176,13 @@ class ConsistencySampling(BaseSampling):
 
         S = []  # List of coarse clusters S_k's
         inconsistent_dbscan_labels, inconsistent_finch_labels = [], []
-        for i, c in enumerate(nx.connected_components(inconsistency_graph)):
+        for i, c in enumerate(_ordered_components(inconsistency_graph)):
             S_k = inconsistency_graph.subgraph(c).copy()
             S.append(nx.create_empty_copy(S_k))
-            dbscan_nodes = {n for n, d in S_k.nodes(data=True) if d["bipartite"] == 0}
-            finch_nodes = set(S_k) - dbscan_nodes
+            dbscan_nodes = _ordered(
+                n for n, d in S_k.nodes(data=True) if d["bipartite"] == 0
+            )
+            finch_nodes = _ordered(set(S_k) - set(dbscan_nodes))
             inconsistent_dbscan_labels.append(
                 list(int(dn.split("-")[1]) for dn in dbscan_nodes)
             )
@@ -200,7 +236,7 @@ class ConsistencySampling(BaseSampling):
             finch_positive_relations = []
             potential_queries = None
             # The following loop iterates twice. Once for DBSCAN and once for FINCH.
-            for c in nx.connected_components(S_k):
+            for c in _ordered_components(S_k):
                 G = S_k.subgraph(c).copy()
                 if "dbscan" in list(G.nodes)[0]:
                     for node in G.nodes:
@@ -698,13 +734,13 @@ class ConsistencySampling(BaseSampling):
             finch_clusters_in_connected_components,
         ) = ([], [])
         cluster_id_to_connected_components_map = {}
-        for i, c in enumerate(nx.connected_components(bipartite_inconsistency_graph)):
+        for i, c in enumerate(_ordered_components(bipartite_inconsistency_graph)):
             connected_subgraph = bipartite_inconsistency_graph.subgraph(c).copy()
             connected_components.append(nx.create_empty_copy(connected_subgraph))
-            dbscan_nodes = {
+            dbscan_nodes = _ordered(
                 n for n, d in connected_subgraph.nodes(data=True) if d["bipartite"] == 0
-            }
-            finch_nodes = set(connected_subgraph) - dbscan_nodes
+            )
+            finch_nodes = _ordered(set(connected_subgraph) - set(dbscan_nodes))
             dbscan_clusters_in_connected_components.append(
                 list(int(dn.split("-")[1]) for dn in dbscan_nodes)
             )
@@ -809,7 +845,7 @@ class ConsistencySampling(BaseSampling):
             dbscan_relations = []
             finch_relations = []
             potential_queries = None
-            for c in nx.connected_components(mst):
+            for c in _ordered_components(mst):
                 G = mst.subgraph(c).copy()
                 if "finch" in list(G.nodes)[0]:
                     for node in G.nodes:

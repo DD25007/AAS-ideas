@@ -632,6 +632,18 @@ which are explicitly "not what Table 1 reports". Same saving, different row bear
 
 ## R9. Dead-code and unused-file sweep, 2026-09-01
 
+**Follow-up 2026-09-05: `evaluation.py` cut 280 -> 72 lines.** Only `eval_wildlife` was
+ever imported (three call sites in `utils.py`). `main()`, `split_protocol`,
+`get_shuffled_indices` and `generate_report` formed a closed island reachable *only* from
+`main()`, which could not run: it calls `split_protocol(user_input)`, passing the `int`
+read from `input()` into the `metadata` DataFrame parameter. Its `protocol_type == 2`
+branch also read a hardcoded `../../../cnnarch/...` path absent from this repo, behind a
+second `input()` prompt -- the same interactive-trap class as C7's `pdb.set_trace()`.
+The live pipeline never used any of it: gallery/query come from `dataset.default_query` /
+`default_gallery`, built in `dataset/wildlife.py`. `eval_wildlife` was verified
+**byte-identical** after the cut, and the now-unused `pandas` / `random` imports went
+with it.
+
 Driven by a reachability trace from the four real entry points (`main.py`, `train_al.py`,
 `aggregate_results.py`, `visualization.py`), then verified file by file — the trace alone
 has false positives on star imports, relative imports and package re-exports.
@@ -940,7 +952,24 @@ only **134 lines differ**, and **17 of 19** top-level functions share names —
 Two copies of the NP3 constrained-clustering implementation and the whole metric suite
 means a bug fixed in one silently persists in the other. Consolidate into one module.
 
-## C4. `sampling/` root vs spcl — WON'T MERGE 2026-09-04 (they are not duplicates)
+## C4. `sampling/` root vs spcl — WON'T MERGE, but they must be kept in sync
+
+**Updated 2026-09-05 — the divergence has now cost us a real bug.** The two packages are
+genuinely different code (`consistency.py` alone differs by 1,638 lines), so merging them
+stays off the table. But they implement the *same samplers*, and fixes have been landing in
+only one copy:
+
+| fix | `spcl/sampling/` (used by `train_al.py`) | `sampling/` (used by `main.py`) |
+|---|---|---|
+| W1 divide-by-zero in `counting_clusters` | fixed 2026-09-02 | **missed until 2026-09-05** |
+| W1's second occurrence (`w_ci`) | missed until 2026-09-05 | missed until 2026-09-05 |
+| R6 `HITL_SORT_COMPONENTS` | added 2026-09-05 | ported same day, 6 sites |
+
+Both are now in sync. The audit that found this is cheap and worth repeating after any
+sampler change: compare the repair markers (`FIXME(...)`, `Todo.md <id>`, `HITL_*`) present
+in each copy and investigate any that appear on one side only.
+
+### Original finding (2026-09-04): they are not duplicates
 
 > Measured with the same AST comparison that made C3 tractable, and it gives the opposite
 > answer:
@@ -1250,7 +1279,7 @@ Also note `spcl_train_usl.py` rebuilds `WildlifeDatasets(...)` at every eval (li
 
 ---
 
-## 11. wildlife-tools — model left on CPU after every eval — BLOCKING (PATCHED)
+## ~~11. wildlife-tools — model left on CPU after every eval~~ — FIXED PROPERLY 2026-09-05
 
 **Symptom:** every run dies at the *first eval boundary* (epoch 10 with `--eval-step 10`),
 after the eval itself has completed and written results:
@@ -1314,6 +1343,31 @@ DeepFeatures.__call__ = _call_preserving_device
 ```
 
 Verified: unpatched leaves the model on `cpu`, patched leaves it on `cuda`.
+
+**Proper fix applied 2026-09-05 — in `get_evaluation_results`, not as a monkeypatch.**
+The wrapper idea above patches `wildlife_tools` globally at import, which is an invisible
+side effect on a third-party class. Instead `utils.py:1311` is now a thin wrapper that
+records the extractor model's device on entry and restores it in a `finally`, delegating to
+`_get_evaluation_results` (the original body, unmodified — the diff is a pure insertion).
+
+This matters more than the original note suggested. There are **six** call sites, and only
+`train_al.py:684` had the one-line patch:
+
+| site | in a loop? | was it patched? |
+|---|---|---|
+| `train_al.py:684` | yes, per eval-step | yes |
+| `train_al.py:751` | no, final eval | not needed |
+| `main.py:237` (`run_one_cycle`) | **yes — `for budget in range(0, args.budget + 1)`** | **no** |
+| `main.py:471`, `main.py:485` | no, one-shot | not needed |
+
+So the authors' own `main.py` AL loop strands the model on the CPU after *every* budget
+cycle, and `main.py` never moves it back — there is no `.to(device)` anywhere in the file.
+Fixing it in the callee covers all six at once and is a no-op wherever the caller already
+handled it.
+
+**Cannot move a metric:** device placement changes no computed value. Verified on three
+paths — model starting on `cpu` stays `cpu`, starting on `cuda:0` returns to `cuda:0`, and
+the device is restored even when the evaluation raises.
 
 **Same bug is latent elsewhere** — `SpCL/examples/spcl_train_usl.py` and the restored
 `RTMem/examples/RTMem_train_usl.py` call `DeepFeatures` identically and will hit it too.
@@ -1386,7 +1440,7 @@ Collected from all 16 `train.log` files of the run that died at the first eval b
 
 The first four are already covered by items 4 and 5. The rest are new:
 
-## W1. `counting_clusters.py:100` — divide-by-zero corrupts the NIS estimate (REAL BUG)
+## ~~W1. `counting_clusters.py:100` — divide-by-zero corrupts the NIS estimate~~ — FULLY FIXED 2026-09-05
 
 Hit by `combined_CC_s2` and `combined_CC_s3`.
 
@@ -1411,6 +1465,29 @@ Two distinct defects:
 Fix: guard explicitly, e.g. `if n_bar > 0 and Q[v_i] > 0:` before accumulating, and drop
 the bare `except`. Note this affects the **NIS baseline row** of Table 1, so any NIS number
 produced before this is fixed should be treated as suspect.
+
+**Closed 2026-09-05 — the first fix was only half of it.** Two gaps found on re-audit:
+
+1. **The root copy was never fixed.** `spcl/sampling/counting_clusters.py` was patched on
+   2026-09-02, but `sampling/counting_clusters.py` still had the original bare `except:`.
+   These are not duplicates (C4): `train_al.py:44` imports the `spcl` one, **`main.py:2`
+   imports the root one**. So the AL grid was clean while `main.py`'s NIS path still
+   corrupted `f_hat`. Now fixed identically in both.
+
+2. **A second, unguarded occurrence of the same division**, in the confidence-interval
+   branch of `nested_is`: `w_ci += ((1 / n_bar) * (1 / Q[v_i]) - f_hat) ** 2`. Same numpy
+   semantics, so `n_bar == 0` makes `var_hat` and `ci` inf. Guarded in both copies.
+
+**Guarding (2) cannot move any metric**, which is why it was safe to land mid-grid:
+`self.K, conf_inter = self.nested_is(...)` assigns `conf_inter` and **never reads it
+again** — the entire `ci=True` branch is dead. `f_hat` (and therefore `K`) is computed
+before the branch and is identical either way.
+
+**Follow-up, deferred until the grid finishes:** since `conf_inter` is unused, passing
+`ci=False` would skip a dead O(N_v x N_n) ~42k-iteration Python loop outright. It is
+output-identical for `K` and consumes no RNG (the branch is pure arithmetic over
+already-drawn samples, so there is no repeat of the O4 desync), but it is not worth
+touching a sampler mid-run for.
 
 ## W2. LBAS cannot fill its budget — MEASURED 2026-09-04 (and it verifies two paper claims)
 
@@ -1467,7 +1544,7 @@ actually consumes, so a "same budget" comparison is not like-for-like. Worth mea
 *utilised* budget per method per cycle rather than assuming the cap — which is exactly the
 statistic the paper reports for AAS (0.033% of a 0.1% cap).
 
-## W3. `wildlife.py:61` — `DtypeWarning` on every metadata read
+## ~~W3. `wildlife.py:61` — `DtypeWarning` on every metadata read~~ — DONE
 
 ```python
 self.csv = pd.read_csv(os.path.join(self.dataset_dir, 'metadata.csv'))
@@ -1477,6 +1554,11 @@ Column 2 of `metadata.csv` has mixed types, so pandas falls back to slow per-chu
 inference and warns. Harmless today but it makes the parse slower and the dtype
 non-deterministic across pandas versions. Fix: pass an explicit `dtype=` for that column,
 or `low_memory=False`.
+
+**Done 2026-09-05.** `low_memory=False` on both metadata reads (`dataset/wildlife.py:73`, `spcl/datasets/wildlife.py:78`). The mixed column is `date`,
+which the pipeline never reads. Verified behaviour-preserving, not assumed: the default
+and `low_memory=False` frames have **identical dtypes for every column** and compare
+`.equals()` True.
 
 ## ~~W4. `pynndescent not installed`~~ — NON-ISSUE 2026-09-04
 
@@ -1708,7 +1790,7 @@ numbers, so it must not be "cleaned up" into always using the real weights.
 
 ---
 
-## 16. `run_suffix` whitelist rejects unknown backbones
+## ~~16. `run_suffix` whitelist rejects unknown backbones~~ — DONE
 
 `main.py:255-266` maps `--model_name` to a short tag through a hardcoded `if/elif` chain and
 `raise NotImplementedError` otherwise. Any backbone not on the list fails instantly, before
@@ -1718,6 +1800,10 @@ substitutes. Added `swin_large_patch4_window7_224` -> `swinL_in` and
 
 **Proper fix:** derive the tag from the model name (slugify) instead of a whitelist, or fall
 back to a sanitised name rather than raising.
+
+**Done 2026-09-05.** `main.py:342-357` keeps `_KNOWN_SUFFIX` as a table of preferred short
+tags but falls through to a slug (`re.sub(r'[^A-Za-z0-9._-]+', '_', ...)` on the last path
+segment) and prints what it chose, instead of raising. Any backbone now runs.
 
 ---
 
@@ -1741,8 +1827,29 @@ outside noise. The corrupted `f_hat` was therefore **not** the whole story for t
   allocation, this is exactly where that difference would live, and it is currently
   unreachable without editing the source.
 
-Still to check against Perez et al. (ECCV 2024): whether `Q[v_i]` and the proposal
-distribution `q` match, and whether a balanced `Nv x Nn` split is what they specify.
+**Checked against the paper's own description of NIS 2026-09-05.** The AAS paper says NIS
+"samples vertices with estimated low degrees, followed by sampling their most similar
+neighbors". Our implementation matches that:
+
+```python
+n_hat[i] = np.sum(s_ij[i])                      # estimated degree
+Q = (1 / n_hat) / np.sum(1 / n_hat)             # inversely proportional to degree  ✓
+sampled_vertices  = np.random.choice(N, N_v, p=Q,  replace=True)
+sampled_neighbors = np.random.choice(N, N_n-1, p=q, replace=True)
+```
+
+So the sampling *distribution* is right. Two deviations remain as candidates:
+
+1. **`replace=True` on both draws** wastes ~1% of the budget on duplicates (measured: 206
+   vertex draws yield ~205 unique, 205 neighbour draws ~204). Small, and it does not explain
+   a 2-point gap on its own.
+2. **`ratio` is hardcoded to 1.0** (`train_al.py:228`), forcing a balanced `Nv ≈ Nn ≈ √n`
+   split. Whether Perez et al. specify a balanced allocation is the open question -- and
+   `--sampling_ratio` cannot currently reach the AL path to test it.
+
+Cheapest next experiment: unhardcode `ratio` and sweep it (e.g. 0.25 / 1 / 4) on one seed.
+That is a one-line change plus three runs, and it directly tests the only structural
+parameter that differs.
 
 ---
 
@@ -1885,6 +1992,29 @@ a run is self-contained regardless of the calling shell.
 > order with `PYTHONHASHSEED=0`.
 >
 > **Fix:** `export PYTHONHASHSEED=0` in `scripts/common.sh`.
+>
+> **Code-level fix added 2026-09-05, default off: `HITL_SORT_COMPONENTS=1`.** The env-var fix
+> only holds for callers who go through `scripts/common.sh`; run `train_al.py` by hand and the
+> nondeterminism is back. `spcl/sampling/consistency.py` now has `_ordered()` /
+> `_ordered_components()`, which sort graph nodes by `(prefix, int(idx))` -- numerically, so
+> `dbscan-2` precedes `dbscan-10` -- at the three sites where a set of string-named nodes
+> becomes an ordered sequence (`consistency.py:111,114-115,154`).
+>
+> It is **off by default on purpose**: sorting picks a different (equally valid) component
+> order than `PYTHONHASHSEED=0` does, so switching it on would move every published AL number
+> by roughly the one-pair boundary delta above. Flag-off is provably untouched -- substituting
+> the flag-off definitions back in and AST-comparing against `HEAD` gives an exact match, so
+> the default path is the original code, not a re-implementation of it.
+>
+> **Still to measure (needs GPU, blocked on the 24-run grid):** an A/B of
+> `HITL_SORT_COMPONENTS=1` vs `PYTHONHASHSEED=0` on one ConSam seed. Expected to differ by
+> ~1 pair in 42,285 (0.002%) and land inside seed noise; if it does, sorting should become the
+> default and `PYTHONHASHSEED` drops back to being a belt-and-braces measure.
+>
+> **Ported to `sampling/consistency.py` (the root copy) the same day.** That file is what
+> `main.py` imports and it has the same defect at **six** sites -- 145, 148-149, 203 in the
+> first implementation and 701, 704-707, 812 in the second. Both copies AST-verify identical
+> to their pre-patch selves with the flag off.
 >
 > **Verified** — two sequential ConSam runs, same GPU:
 >

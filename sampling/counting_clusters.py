@@ -133,11 +133,16 @@ class CountingClusters(BaseSampling):
                     self.cl_pairs.append((v_i, v_j))
                 sum_n_bar += gt_s_ij[v_i][v_j] / q_all[i][v_j]
             n_bar = sum_n_bar / len(sampled_neighbors[i])
-            # sum_cc += (1/n_bar)*(1/Q[v_i])
-            try:
+            # W1: the try/except this replaces was broken twice over. sum_n_bar accumulates
+            # numpy scalars, so n_bar == 0 makes `1/n_bar` return inf with a RuntimeWarning
+            # instead of raising -- sum_cc silently became inf, and with it f_hat and NIS's
+            # population estimate K. And when the bare `except` did fire it set `sum_cc = 0`,
+            # discarding every term already summed rather than skipping the offending one.
+            # n_bar == 0 means no sampled neighbour of v_i contributed, so the term is
+            # genuinely undefined: skip it. (Fixed in spcl/sampling/ 2026-09-02; this root
+            # copy, which main.py imports, was missed until 2026-09-05.)
+            if n_bar > 0 and Q[v_i] > 0:
                 sum_cc += (1 / n_bar) * (1 / Q[v_i])
-            except:
-                sum_cc = 0
         f_hat = sum_cc / len(sampled_vertices)
 
         if not ci:
@@ -150,7 +155,11 @@ class CountingClusters(BaseSampling):
                 for v_j in sampled_neighbors[i]:
                     sum_n_bar += gt_s_ij[v_i][v_j] / q_all[i][v_j]
                 n_bar = sum_n_bar / len(sampled_neighbors[i])
-                w_ci += ((1 / n_bar) * (1 / Q[v_i]) - f_hat) ** 2
+                # W1 (second occurrence): same divide-by-zero as the f_hat loop. n_bar is a
+                # numpy scalar, so n_bar == 0 gives inf + RuntimeWarning rather than raising,
+                # and var_hat/ci become inf. Skip the term instead, matching the guard above.
+                if n_bar > 0 and Q[v_i] > 0:
+                    w_ci += ((1 / n_bar) * (1 / Q[v_i]) - f_hat) ** 2
             var_hat = w_ci / N_v  # estimated variance
             ci = 1.96 * (np.sqrt(var_hat / N_v))  # 95% confidence intervals
             return f_hat, ci

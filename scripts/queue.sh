@@ -17,7 +17,10 @@ OUTROOT=${2:?usage: queue.sh <al|row> <OUTROOT> [jobs...]}
 shift 2
 
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-8}"
-STATE="$HERE/.state/${MODE}_attempts.txt"
+# Namespaced by output root: two queues in the same MODE but different OUTROOTs
+# (e.g. a re-run grid alongside a debug grid) must not share an attempt counter,
+# or one will wrongly consider the other's rows exhausted.
+STATE="$HERE/.state/${MODE}_$(basename "$OUTROOT")_attempts.txt"
 mkdir -p "$HERE/.state" "$OUTROOT"; touch "$STATE"
 
 case "$MODE" in

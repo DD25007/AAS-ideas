@@ -138,7 +138,11 @@ class CountingClusters(BaseSampling):
                 for v_j in sampled_neighbors[i]:
                     sum_n_bar += gt_s_ij[v_i][v_j] / q_all[i][v_j]
                 n_bar = sum_n_bar / len(sampled_neighbors[i])
-                w_ci += ((1 / n_bar) * (1 / Q[v_i]) - f_hat) ** 2
+                # W1 (second occurrence): same divide-by-zero as the f_hat loop. n_bar is a
+                # numpy scalar, so n_bar == 0 gives inf + RuntimeWarning rather than raising,
+                # and var_hat/ci become inf. Skip the term instead, matching the guard above.
+                if n_bar > 0 and Q[v_i] > 0:
+                    w_ci += ((1 / n_bar) * (1 / Q[v_i]) - f_hat) ** 2
             var_hat = w_ci / N_v  # estimated variance
             ci = 1.96 * (np.sqrt(var_hat / N_v))  # 95% confidence intervals
             return f_hat, ci

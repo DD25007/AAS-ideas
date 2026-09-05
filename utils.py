@@ -870,6 +870,11 @@ def unfurl(list_of_dicts):
     return unfurled
 
 
+_BASICTRAINER_ACCUM = os.environ.get(
+    "HITL_BASICTRAINER_ACCUM", ""
+).lower() in ("1", "true", "yes")
+
+
 class CustomTrainer(BasicTrainer):
     def __init__(
         self,
@@ -953,6 +958,7 @@ class CustomTrainer(BasicTrainer):
         }
         model = self.model.train()
         losses = []
+        last_i = -1
         for i, batch in enumerate(
             tqdm(loader, desc=f"Epoch {self.epoch}: ", mininterval=1, ncols=100)
         ):
@@ -967,10 +973,26 @@ class CustomTrainer(BasicTrainer):
 
             out = model(x)
             loss = self.objective(out, y)
-            loss.backward()
-            if (i - 1) % self.accumulation_steps == 0:
+            # HITL_BASICTRAINER_ACCUM=1 restores the accumulation semantics of the
+            # BasicTrainer this class overrides (Todo.md item 13):
+            #   * scale the loss by accumulation_steps -- without it, N unscaled backward
+            #     passes accumulate before each step, so the effective gradient is N x
+            #     larger (N=2 here), equivalent to doubling the learning rate;
+            #   * step on (i+1) % N rather than (i-1) % N -- identical for N in {1,2},
+            #     divergent for N >= 3;
+            #   * flush leftover gradients at epoch end instead of discarding them.
+            # Default is OFF so existing results are unchanged; this exists to test whether
+            # the skyline's overshoot (+1.6 to +4.3 mAP) is caused by the missing scaling.
+            if _BASICTRAINER_ACCUM:
+                (loss / self.accumulation_steps).backward()
+                step_now = (i + 1) % self.accumulation_steps == 0
+            else:
+                loss.backward()
+                step_now = (i - 1) % self.accumulation_steps == 0
+            if step_now:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
+            last_i = i
 
             losses.append(loss.detach().cpu())
 
@@ -1010,6 +1032,10 @@ class CustomTrainer(BasicTrainer):
         # authors' skyline. It is not known how they produced Table 1's 64.29% mAP row,
         # and this path cannot have been run as shipped. Treat skyline numbers obtained
         # this way as indicative only.
+        if _BASICTRAINER_ACCUM and last_i >= 0 and (last_i + 1) % self.accumulation_steps:
+            self.optimizer.step()   # flush leftover gradients, as BasicTrainer does
+            self.optimizer.zero_grad()
+
         if not self.update_pseudo_labels:
             return epoch_data
 
@@ -1283,6 +1309,33 @@ def _subset_name(dataset):
 
 
 def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
+    """Evaluate, then put the extractor's model back on the device it started on.
+
+    Todo.md item 11: `wildlife_tools`' `DeepFeatures.__call__` ends with
+    `self.model = self.model.to("cpu")` (`wildlife_tools/data/cache.py:84` in 1.0.3), and
+    `self.model` is the *same object* the caller is training -- so every evaluation silently
+    strands the model on the CPU. `train_al.py:684` patched that at one of the six call
+    sites; `main.py:237` did not, and it sits inside `for budget in range(...)`, so the
+    authors' own `main.py` AL loop leaves the model on the CPU after every cycle.
+
+    Restoring here fixes all six sites at once and is a no-op where the caller already did
+    it. Device placement cannot change any computed value, so this moves no metric.
+    """
+    _model = getattr(megadescriptor_extractor, "model", None)
+    try:
+        _device = next(_model.parameters()).device if _model is not None else None
+    except StopIteration:
+        _device = None
+    try:
+        return _get_evaluation_results(
+            megadescriptor_extractor, dataset, folder, epoch
+        )
+    finally:
+        if _device is not None:
+            megadescriptor_extractor.model = _model.to(_device)
+
+
+def _get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
     import evaluation
     import copy
     import json

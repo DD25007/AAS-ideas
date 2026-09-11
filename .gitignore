@@ -1,6 +1,6 @@
 # Run outputs. Covers outputs_initial/ (the frozen reproduction baseline) and any
 # outputs_verify*/ tree used for parity checks.
-outputs*/
+outputs*
 
 # Checkpoints and evaluation artefacts, when --out_dir points somewhere other than outputs/.
 pretrained_models/
@@ -31,3 +31,8 @@ __pycache__/
 
 # queue driver logs
 outputs_*_queue.log
+
+# Ad-hoc diagnostics and their reports (date coverage, AAS ML/CL constraint counts,
+# AAS temporal-drift blindness). Read-only analyses of frozen outputs, not part of
+# the pipeline; kept locally so they don't age into stale committed numbers.
+investigations/

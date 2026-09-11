@@ -1,5 +1,0 @@
-23:52:36 item13: resnet50_skyline_e30_zerobased with BasicTrainer accumulation on gpu2
-bash: /storage/dd25007/conda_envs/hitl/lib/libtinfo.so.6: no version information available (required by bash)
-02:21:05 item13: resnet50_skyline_e50_zerobased with BasicTrainer accumulation on gpu2
-bash: /storage/dd25007/conda_envs/hitl/lib/libtinfo.so.6: no version information available (required by bash)
-05:40:09 item13 experiment complete

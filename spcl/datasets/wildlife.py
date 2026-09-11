@@ -41,6 +41,8 @@ class Wildlife(BaseImageDataset):
         subset="combined",
         relabel=False,
         dataset_split_seed=0,
+        # [--partition-seed] see split_train_into_gallery_and_unknown; 102 = published
+        partition_seed=102,
         images_per_id=5,
         metric="precomputed",
         **kwargs,
@@ -48,6 +50,7 @@ class Wildlife(BaseImageDataset):
         super(Wildlife, self).__init__()
         self.dataset_dir = osp.join(root, self.dataset_dir)
         self.dataset_split_seed = dataset_split_seed
+        self.partition_seed = partition_seed  # [--partition-seed]
         self.images_per_id = images_per_id
         self.metric = metric
         self.subset = subset
@@ -477,7 +480,11 @@ class Wildlife(BaseImageDataset):
 
     def split_train_into_gallery_and_unknown(self, identities):
         # Fix the seed to freeze the splits
-        set_seed(102)
+        # [--partition-seed] This 102 pins the labelled/unlabelled identity partition,
+        # so --split-seed varies only the representative-gallery draw and the same
+        # identities are "known" in every split. Exposed so that can be varied
+        # deliberately; the default is 102, which reproduces every published run.
+        set_seed(getattr(self, "partition_seed", 102))
         np.random.shuffle(identities)
         num_labeled = int(len(identities) * 0.8)
         # Reset the seed as per the user-specific seed for AL

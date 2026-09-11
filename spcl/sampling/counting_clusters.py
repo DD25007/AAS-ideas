@@ -107,23 +107,6 @@ class CountingClusters(BaseSampling):
                     self.cl_pairs.append((v_i, v_j))
                 sum_n_bar += gt_s_ij[v_i][v_j] / q_all[i][v_j]
             n_bar = sum_n_bar / len(sampled_neighbors[i])
-            # FIXME(bug): the try/except below is broken in two ways, and corrupts f_hat --
-            # the population-size estimate that sets K for the NIS sampler.
-            #   1. It does not catch the common case. sum_n_bar accumulates numpy scalars,
-            #      so when n_bar is numpy 0.0, `1/n_bar` returns inf with a RuntimeWarning
-            #      rather than raising -- sum_cc silently becomes inf. (Observed in
-            #      combined_CC_s2 / combined_CC_s3: "RuntimeWarning: divide by zero
-            #      encountered in scalar divide" at this line.)
-            #   2. When it *does* fire (sum_n_bar never added to, so n_bar is a Python
-            #      float 0.0 -> ZeroDivisionError), `sum_cc = 0` RESETS the accumulator,
-            #      discarding every term summed so far instead of skipping the bad one.
-            # n_bar == 0 means no sampled neighbour of v_i contributed, so the correct
-            # behaviour is to skip this vertex's term and keep accumulating.
-            # sum_cc += (1/n_bar)*(1/Q[v_i])
-            # try:
-            #     sum_cc += (1/n_bar)*(1/Q[v_i])
-            # except:
-            #     sum_cc = 0
             if n_bar > 0 and Q[v_i] > 0:
                 sum_cc += (1 / n_bar) * (1 / Q[v_i])
         f_hat = sum_cc / len(sampled_vertices)

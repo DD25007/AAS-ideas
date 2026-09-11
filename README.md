@@ -19,25 +19,27 @@ protocol for its AL block.
 
 Run on 8x NVIDIA H200. **See `Todo.md`** for every version constraint, bug and
 optimisation found along the way — it is the companion to this file. The runs behind every
-number are frozen read-only in `outputs_initial/`; `aggregate_results.py` regenerates the
-tables below from them.
+number live in `outputs_final/`; `aggregate_results.py` regenerates the tables below from
+them. All 52 runs (6 AL samplers x 4 seeds, 7 non-AL rows x 4 seeds) come from a single
+`scripts/run.sh queue` invocation, so every row shares one consistently-derived gallery
+cache.
 
 ## Environment
 
 ```bash
-conda create -n alm python=3.10 -y && conda activate alm
-conda install -n alm -c pytorch faiss-gpu -y      # NOT pip: the wheels lack sm_90 kernels
+conda create -n hitl python=3.10 -y && conda activate hitl
+conda install -n hitl -c pytorch faiss-gpu -y     # NOT pip: the wheels lack sm_90 kernels
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
-conda env config vars set PYTHONNOUSERSITE=1 -n alm
-conda env config vars set LD_LIBRARY_PATH=$CONDA_PREFIX/lib -n alm
+conda env config vars set PYTHONNOUSERSITE=1 -n hitl
+conda env config vars set LD_LIBRARY_PATH=$CONDA_PREFIX/lib -n hitl
 ```
 
 Both `env config vars` lines are required, not optional — see `Todo.md` items 8 and 9.
-`alm` is preserved untouched as the environment these numbers were produced in. Ongoing work
-uses `hitl`, a clone of it (`conda create --clone alm -n hitl`), so the published results stay
-re-runnable exactly as they were. The launchers in `scripts/` export `LD_LIBRARY_PATH`
-themselves, since they invoke the interpreter directly rather than activating the env.
+`hitl` is the environment these numbers were produced in. The MiewID row needs a second env
+(`hitl-miewid`) pinned to transformers 4.x — `scripts/run.sh` selects it per job. The
+launchers export `LD_LIBRARY_PATH` themselves, since they invoke the interpreter directly
+rather than activating the env.
 `finch-clust==0.2.1` is a hard pin: 0.2.2+ changes a signature the AAS sampler calls
 positionally, and the failure is silent (the run parks at a `pdb` prompt). Item 1.
 
@@ -49,35 +51,37 @@ a `.query()` on the `dataset` column — no per-dataset download is needed.
 
 | Method      | mAP       | mINP      | BAKS      | AUC ROC   | Top-1     | Top-3     | Top-5     | Top-10    | paper mAP | Δ mAP     |
 | ----------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- | --------- |
-| SpCL (Base) | 43.95     | 26.46     | 55.61     | 67.57     | 56.11     | 70.41     | 76.77     | 83.86     | 44.95     | −1.00     |
-| + Random    | 45.27     | 27.72     | 56.84     | 68.10     | 57.03     | 71.12     | 77.55     | 84.33     | 46.67     | −1.40     |
-| + GBAS      | 47.80     | 29.65     | 59.66     | 70.11     | 60.08     | 74.64     | 80.48     | 87.32     | 48.61     | −0.81     |
-| + LBAS      | 51.14     | 32.94     | 62.62     | 72.80     | 63.90     | 76.69     | 81.71     | 88.17     | 52.15     | −1.01     |
-| + NIS       | 48.84     | 31.07     | 60.23     | 70.85     | 61.01     | 74.18     | 79.70     | 86.29     | 50.72     | −1.88     |
-| **+ AAS**   | **55.78** | **37.11** | **68.41** | **75.54** | **68.48** | **80.53** | **84.52** | **90.23** | 56.14     | **−0.36** |
+| SpCL (Base) | 43.91     | 26.90     | 55.30     | 67.06     | 55.74     | 69.92     | 75.94     | 83.48     | 44.95     | −1.04     |
+| + Random    | 45.46     | 28.67     | 56.37     | 67.33     | 57.22     | 69.99     | 76.35     | 83.84     | 46.67     | −1.21     |
+| + GBAS      | 47.84     | 30.02     | 59.44     | 69.49     | 60.39     | 74.05     | 79.55     | 86.66     | 48.61     | −0.77     |
+| + LBAS      | 50.88     | 32.93     | 62.94     | 72.40     | 63.52     | 75.95     | 81.19     | 87.96     | 52.15     | −1.27     |
+| + NIS       | 48.69     | 30.96     | 60.12     | 71.57     | 61.20     | 74.16     | 79.71     | 87.20     | 50.72     | −2.03     |
+| **+ AAS**   | **56.21** | **38.14** | **68.58** | **75.90** | **68.49** | **79.99** | **85.00** | **90.16** | 56.14     | **+0.07** |
 
 Per-seed mAP (seeds 1–4) and standard deviation:
 
 | Method      | s1    | s2    | s3    | s4    | std  |
 | ----------- | ----- | ----- | ----- | ----- | ---- |
-| SpCL (Base) | 43.25 | 44.78 | 43.79 | 44.00 | 0.64 |
-| + Random    | 45.38 | 44.82 | 45.39 | 45.48 | 0.30 |
-| + GBAS      | 48.13 | 48.01 | 47.11 | 47.95 | 0.46 |
-| + LBAS      | 51.55 | 51.22 | 51.02 | 50.77 | 0.33 |
-| + NIS       | 49.75 | 48.84 | 48.71 | 48.05 | 0.70 |
-| + AAS       | 55.80 | 55.18 | 55.43 | 56.72 | 0.68 |
+| SpCL (Base) | 44.38 | 43.80 | 42.83 | 44.62 | 0.79 |
+| + Random    | 45.95 | 44.90 | 46.51 | 44.50 | 0.93 |
+| + GBAS      | 48.11 | 47.91 | 47.92 | 47.43 | 0.29 |
+| + LBAS      | 50.89 | 52.24 | 49.96 | 50.42 | 0.99 |
+| + NIS       | 48.58 | 49.41 | 48.66 | 48.11 | 0.54 |
+| + AAS       | 56.57 | 56.50 | 56.15 | 55.63 | 0.43 |
 
 **What reproduces:**
 - The **method ranking is exact** on all eight metrics: AAS > LBAS > NIS > GBAS > Random > Base.
-- AAS lands within **0.36 mAP** of the published 56.14.
-- The paper's headline gains hold: **+11.83 mAP over base USL** (paper claims +11.19) and
-  **+4.64 over the best AL baseline** (paper claims +3.99).
-- Seed variance is small (std 0.30–0.70), so the residual gaps are systematic, not noise.
+- AAS — the paper's contribution — lands **+0.07 mAP** from the published 56.14. Across all
+  13 rows the mean deviation is **+0.24 mAP**.
+- The paper's headline gains hold and are slightly exceeded: **+12.30 mAP over base USL**
+  (paper claims +11.19) and **+5.33 over the best AL baseline** (paper claims +3.99).
+- Seed variance is small (std 0.29–0.99), so the residual gaps are systematic, not noise.
 
-**Unexplained:** every *trained* row sits ≈1 mAP below the paper. The untrained
-ResNet-50 baseline (below) reproduces to −0.37, which rules out the data splits, gallery
-construction, evaluation code and metrics — those are shared and they reproduce. The
-remaining suspect is training numerics (torch/cuDNN versions differ from the authors').
+**The remaining gaps are per-method, not a uniform offset.** AAS reproduces exactly while
+the AL *baselines* sit 0.8–2.0 below, NIS worst at −2.03. Since all rows share the same
+data splits, gallery construction, evaluation code and metrics — and the untrained ResNet-50
+baseline reproduces to −0.62 — the deficit is not in the shared pipeline. NIS is tracked
+separately as `Todo.md` item 17.
 
 ## Baseline / foundation / skyline rows
 
@@ -86,44 +90,52 @@ standard deviation across those splits.
 
 | Row                              | n   | mAP             | mINP  | BAKS  | AUC ROC | Top-1 | Top-5 | paper mAP | Δ mAP     |
 | -------------------------------- | --- | --------------- | ----- | ----- | ------- | ----- | ----- | --------- | --------- |
-| ResNet-50 (Baseline)             | 4   | **38.23** ±0.52 | 20.46 | 49.64 | 62.49   | 48.94 | 70.92 | 38.88     | **−0.65** |
-| Foundation row (ImageNet Swin-L) | 4   | **44.46** ±0.34 | 25.54 | 57.95 | 64.74   | 56.62 | 76.04 | 45.65     | **−1.19** |
-| Skyline, 30 ep, zerobased        | 4   | 65.86 ±0.20     | 49.33 | 75.33 | 74.66   | 75.38 | 89.73 | 64.29     | +1.57     |
-| Skyline, 30 ep, offset           | 4   | 65.90 ±0.45     | 49.14 | 75.38 | 75.16   | 75.68 | 89.88 | 64.29     | +1.61     |
-| Skyline, 50 ep, zerobased        | 4   | 68.55 ±0.19     | 52.40 | 77.84 | 76.61   | 77.88 | 90.45 | 64.29     | +4.26     |
-| Skyline, 50 ep, offset           | 4   | 68.39 ±0.51     | 52.33 | 77.66 | 76.85   | 77.82 | 90.49 | 64.29     | +4.10     |
+| ResNet-50 (Baseline)             | 4   | **38.26** ±0.47 | 20.48 | 49.45 | 62.69   | 48.71 | 70.96 | 38.88     | **−0.62** |
+| Foundation row (ImageNet Swin-L) | 4   | **44.49** ±0.45 | 25.67 | 58.07 | 64.75   | 56.51 | 75.98 | 45.65     | **−1.16** |
+| MiewID (foundation)              | 4   | **41.39** ±0.13 | 20.31 | 58.40 | 64.67   | 57.76 | 76.67 | 41.16     | **+0.23** |
+| Skyline, 30 ep, zerobased        | 4   | 65.84 ±0.19     | 49.35 | 75.50 | 75.18   | 75.63 | 90.05 | 64.29     | +1.55     |
+| Skyline, 30 ep, offset           | 4   | 65.56 ±0.53     | 48.60 | 75.30 | 75.13   | 75.26 | 89.74 | 64.29     | +1.27     |
+| Skyline, 50 ep, zerobased        | 4   | 68.62 ±0.15     | 52.71 | 78.01 | 77.42   | 78.12 | 90.21 | 64.29     | +4.33     |
+| Skyline, 50 ep, offset           | 4   | 68.08 ±0.23     | 51.91 | 77.58 | 76.78   | 77.54 | 90.22 | 64.29     | +3.79     |
 
 Not a Table 1 row, but measured for comparison:
 
 | Model                              | n   | mAP         | mINP  | BAKS  | AUC ROC | Top-1 | Top-5 |
 | ---------------------------------- | --- | ----------- | ----- | ----- | ------- | ----- | ----- |
 | MegaDescriptor-L-224, real weights | 4   | 53.34 ±0.16 | 32.86 | 67.90 | 68.30   | 67.78 | 85.91 |
-| MiewID (foundation) | 4   | **41.38** ±0.06 | 20.14 | 58.63 | 64.55   | 57.89 | 76.77 |
 
-This row is a **side experiment, not a Table 1 row**: it exists only to confirm that the
-paper's "MegaDescriptor" row is really ImageNet Swin-L. It is also no longer reproducible —
-it needed a bypass of the `get_model` swap that has since been reverted. The Table 1 row is
-the foundation row above; `scripts/run_row.sh megadescriptor` runs it the authors' way.
+This is a **side experiment, not a Table 1 row**: it exists only to confirm that the paper's
+"MegaDescriptor" row is really ImageNet Swin-L. It is no longer reproducible — it needed a
+bypass of the `get_model` swap that has since been reverted — so the figures above are
+retained from the earlier reproduction. The Table 1 row is the foundation row;
+`scripts/run.sh one row:megadescriptor:0 <gpu> <out>` runs it the authors' way.
 
-**ResNet-50 Baseline: −0.65 mAP.** This is the load-bearing result — it uses no training at
-all, so it isolates the ≈1-point deficit on the trained rows to training numerics rather
-than to the data splits, gallery construction, evaluation code or metrics, all of which
-this row shares and reproduces.
+**ResNet-50 Baseline: −0.62 mAP, MiewID: +0.23.** These are the load-bearing results — they
+use no training at all, so they isolate the residual gaps on the trained baseline rows to
+training numerics rather than to the data splits, gallery construction, evaluation code or
+metrics, all of which these rows share and reproduce.
 
 ### Skyline: the label mode is irrelevant, the epoch budget is not
 
-With 4 seeds the two label modes are **indistinguishable**: 65.86 ±0.20 vs 65.90 ±0.45 at
-30 epochs (0.04 apart), and 68.55 ±0.19 vs 68.39 ±0.51 at 50 epochs (0.16 apart). Both
-gaps are well inside one standard deviation.
+At 30 epochs the two label modes are **indistinguishable**: 65.84 ±0.19 vs 65.56 ±0.53,
+0.28 apart and inside one standard deviation. At 50 epochs `zerobased` is ahead by 0.54
+(68.62 ±0.15 vs 68.08 ±0.23) — small, but 2–3σ, so the modes are *not* strictly equivalent
+once training runs long enough.
 
-That settles the off-by-one (`Todo.md` 13b): once `num_classes` is made consistent with the
-labels, whether you use `0..N-1` or `1..N` + a dead class 0 changes nothing numerically.
-The `+1` was purely a **crash** bug, not a correctness one.
+That still settles the off-by-one (`Todo.md` 13b) as a **crash** bug rather than a
+correctness one: once `num_classes` is consistent with the labels, both modes train and land
+within 0.6 mAP. But the dead class 0 that `offset` keeps is not entirely free, so
+`zerobased` is the better default.
 
-The epoch budget, by contrast, is decisive: **30 ep → ≈65.9, 50 ep → ≈68.5**, a 2.6 mAP
-difference at ~0.2–0.5 std. Neither reproduces the paper's 64.29 — both overshoot, 30
-epochs by +1.6 and 50 by +4.3. So the paper's skyline used *at most* 30 epochs, or a
+The epoch budget matters far more: **30 ep → ≈65.7, 50 ep → ≈68.4**, a 2.7 mAP difference
+against ~0.2–0.5 std. Neither reproduces the paper's 64.29 — both overshoot, 30 epochs by
++1.3 to +1.6 and 50 by +3.8 to +4.3. So the paper's skyline used *at most* 30 epochs, or a
 configuration we have not identified.
+
+**The overshoot is mAP-only and directional.** These rows sit *above* the paper on mAP but
+*below* it on AUC ROC (75.2 and 77.4 against 80.02, i.e. −4.8 and −2.6). A uniformly
+stronger model would move both the same way, so the explanation is not simply "trained
+longer". Gradient scaling was tested as a cause and ruled out (`Todo.md` item 13).
 
 **Skyline rows remain makeshift — treat as indicative only.** The `--skyline` path cannot
 run as shipped (three separate defects, `Todo.md` item 13); most importantly
@@ -140,27 +152,12 @@ MegaDescriptor-L-224 whenever `--dataset combined`, commented
 
 |                                    | mAP       | Top-1     | AUC ROC   |
 | ---------------------------------- | --------- | --------- | --------- |
-| ImageNet Swin-L (the substitution) | **−1.19** | **+0.16** | **+0.62** |
+| ImageNet Swin-L (the substitution) | **−1.16** | **+0.05** | **+0.63** |
 | MegaDescriptor, real weights       | +7.69     | +11.31    | +4.18     |
 
-(MiewID, the other foundation row, **is** reproduced — 41.38 vs the paper's 41.16, the
-closest row in the table. It needs transformers 4.x: the model loads via
-`trust_remote_code` and its modelling code predates the 5.x loader. Run it with the
-`hitl-miewid` env; `Todo.md` item 14.)
-
-**ResNet-50 Baseline reproduces to −0.37 mAP / −0.10 Top-1.** This is the load-bearing
-result: it uses no training at all, so it isolates the ≈1-point deficit on the trained
-rows to training numerics rather than to the data splits, gallery construction,
-evaluation code or metrics — all of which this row shares and reproduces.
-
-**Skyline rows are makeshift — treat as indicative only.** The `--skyline` path cannot run
-as shipped (three separate defects, see `Todo.md` item 13); most importantly
-`CustomTrainer` re-clusters and overwrites the ground-truth labels at the end of every
-epoch, which kills training at epoch 1. We disabled that for the skyline, which is what a
-fully-supervised run *should* do, but that is our inference, not documented behaviour.
-Neither epoch budget reproduces 64.29 — all four variants overshoot. The label mode
-(`zerobased` vs `offset`) changes little (0.3–0.7 mAP); the epoch budget changes a lot
-(≈3 mAP).
+(MiewID, the other foundation row, **is** reproduced — 41.39 vs the paper's 41.16. It needs
+transformers 4.x: the model loads via `trust_remote_code` and its modelling code predates
+the 5.x loader, so `scripts/run.sh` gives that job the `hitl-miewid` env; `Todo.md` item 14.)
 
 ### How many runs does the paper average?
 
@@ -170,10 +167,11 @@ skyline, foundation or USL rows. Since the protocol draws *"a randomly chosen 20
 individuals"* as the held-out set, every row is split-dependent, so those are plausibly
 averaged too — which is why **we ran 4 seeds for every row here**, not just the AL block.
 
-Measured split noise: **±0.16–0.52 mAP** for the eval-only rows, **±0.19–0.51** for the
-trained skyline. So the ≈1 mAP deficit on the trained AL rows is roughly 2–3σ and is a
-real effect, not measurement slop; whereas the 0.04–0.17 gaps between skyline label modes
-are firmly inside the noise.
+Measured split noise: **±0.13–0.47 mAP** for the eval-only rows, **±0.15–0.53** for the
+trained skyline, **±0.29–0.99** across AL seeds. So the 0.8–2.0 mAP gaps on the AL baseline
+rows are roughly 1–3σ and are real effects rather than measurement slop; the 0.28 gap
+between skyline label modes at 30 epochs is inside the noise, while the 0.54 gap at 50
+epochs is not.
 
 ## Commands actually used
 
@@ -181,37 +179,39 @@ The commands at the top of this README do **not** reproduce Table 1's AL rows. T
 from `train_al.py`, with a ResNet-50 backbone and SpCL's training configuration, as the
 paper's implementation details specify.
 
-Use the launchers in [`scripts/`](scripts/) — they carry the GPU/VRAM gating, the BLAS
-thread caps and the `LD_LIBRARY_PATH` that conda's faiss needs, none of which are optional:
+Use [`scripts/run.sh`](scripts/run.sh) — it carries the GPU/VRAM gating, the BLAS thread
+caps and the `LD_LIBRARY_PATH` that conda's faiss needs, none of which are optional:
 
 ```bash
-bash scripts/queue.sh al  outputs_new     # all 24 AL runs,  1 job/GPU, auto-retry
-bash scripts/queue.sh row outputs_new     # all 24 baseline / foundation / skyline runs
+bash scripts/run.sh queue  outputs_new    # all 52 jobs, VRAM-gated, auto-retry
+bash scripts/run.sh status outputs_new    # done / running / pending
 ```
 
 Single runs, if you want the underlying commands:
 
 ```bash
-# AL rows (SpCL base + Random / GBAS / LBAS / NIS(CC) / AAS(ConSam)); omit -s for SpCL base
-bash scripts/run_grid.sh ConSam 1 0 outputs_new
+# AL rows (SpCL base + Random / GBAS / LBAS / NIS(CC) / AAS(ConSam)); USL = no -s at all
+bash scripts/run.sh one al:ConSam:1 0 outputs_new
 #   -> python -u train_al.py -d wildlife --subset combined -s ConSam --seed 1 \
 #             --data-dir $REPO/dataroot --logs-dir <out> -j 6
 
 # baseline / foundation / skyline rows
-bash scripts/run_row.sh resnet50_baseline 0 0 outputs_new
+bash scripts/run.sh one row:resnet50_baseline:0 0 outputs_new
 #   -> python -u main.py --dataset combined --dataset_path <dir> --out_dir <out> \
 #             --baseline --model_name resnet50 --seed 1 --sample_seed 0 \
 #             --images_per_id 5 --metric precomputed
 ```
 
+`miewid` selects its own interpreter (transformers 4.x); nothing else needs changing.
+
 Defaults already match the paper: `--epochs 50 --eval-step 10` (5 AL cycles),
 `--consam_eps 0.6 --consam_k 5 --consam_sim_thresh 0.3` = (ε, k_max, s_min) = (0.6, 5, 0.3),
 and the 0.02%-per-cycle budget hardcoded in `spcl/sampling/base.py`.
 
-Runs go to `<root>/{al,table1}/<row>/s<seed>/`, matching the frozen baseline, so
+Runs go to `<root>/{al,table1}/<row>/s<seed>/`, so
 
 ```bash
-python aggregate_results.py --compare outputs_initial outputs_new
+python aggregate_results.py --compare outputs_final outputs_new
 ```
 
 rebuilds both tables above from the JSONs and reports any cell that moved.
@@ -254,8 +254,11 @@ them. Full reasoning in `Todo.md`.
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `requirements.txt` | pin `finch-clust==0.2.1`, `transformers<5` | 0.2.2+ silently breaks AAS (item 1); transformers 5.x breaks MiewID's `trust_remote_code` loader (item 14) |
 | `scripts/common.sh` | `PYTHONHASHSEED=0`, `LD_LIBRARY_PATH`, thread caps | **AL runs were not reproducible**: the AAS sampler iterates `nx.connected_components()` over string-named nodes, so per-process string hashing changed which pairs it selected (R6). The other two were never applied by the launchers at all (R5, item 8) |
-| `train_al.py` | `model.to('cuda:0')` after eval; `spcl.sampling` imports; `cudnn.benchmark` off; `manual_seed_all`; unknown-sampler guard | wildlife-tools leaves the model on CPU (item 11); two branches called names that were never imported; a typo in `-s` silently ran plain USL under an AL row's name |
-| `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat` | corrupts the NIS estimate (W1) |
+| `train_al.py` | `spcl.sampling` imports; `cudnn.benchmark` off; `manual_seed_all`; unknown-sampler guard | two branches called names that were never imported; a typo in `-s` silently ran plain USL under an AL row's name |
+| `utils.py` | `get_evaluation_results` restores the extractor's device | wildlife-tools ends `__call__` with `self.model.to("cpu")` on the caller's own model (item 11). Fixed in the callee, so all six call sites are covered — `main.py:237` sits inside the budget loop and never had the old per-call-site patch |
+| `sampling/counting_clusters.py`, `spcl/sampling/counting_clusters.py` | guard the divide-by-zero in `f_hat`, and a second one in the confidence-interval branch | corrupts the NIS estimate (W1). Both copies: `train_al.py` imports the `spcl` one, `main.py` the root one, and the fix sat in only one for three days |
+| `sampling/consistency.py`, `spcl/sampling/consistency.py` | `HITL_SORT_COMPONENTS=1`, default off | code-level fix for R6, so the sampler is reproducible without relying on the launcher setting `PYTHONHASHSEED`. Off by default because sorting picks a different (equally valid) order and would move published numbers |
+| `evaluation.py` | 280 -> 72 lines | only `eval_wildlife` was ever imported; the rest was reachable only from an interactive `main()` that could not run (it passed an `int` where a DataFrame was expected) |
 | `main.py` | skyline label mode + `extra_classes`; `get_evaluation_results` epoch arg; `run_suffix` now slugifies | items 13a/13b, 16 |
 | `utils.py` | `update_pseudo_labels` flag; `_subset_name()` shim; `Normalized Accuracy@0.7` fix; NEP 50 float casts | item 13c; C3 merge; the metric computed `sqrt(BAKS*BAKS)` in all six dicts; numpy 2 keeps `float32` where numpy 1 gave `float64` |
 | `gallery_cache.py` (new) | caches the gallery selection **and its RNG state** | O4; the first version desynchronised `np.random` between cache hit and miss, which broke the AL ranking until fixed |
@@ -267,13 +270,13 @@ now in a state that reproduces Table 1 as published.
 ## Output layout
 
 ```
-outputs_initial/                         frozen, read-only; see its own README.md
-  al/<sampler>/s<seed>/                  AL grid, 24 runs (6 methods x 4 seeds)
+outputs_final/                           all 52 runs behind the tables above
+  al/<sampler>/s<seed>/                  AL grid, 24 runs (6 methods x 4 seeds 1-4)
     wildlife/combined/evaluation/evaluation_metrics_52.json  <- 13 per-dataset values
     logs_al/combined/results.csv                             <- per-cycle micro mAP
-  table1/<row>/s<seed>/                  baseline / foundation / skyline, seeds 0-3
+  table1/<row>/s<seed>/                  non-AL rows, 28 runs (7 rows x 4 seeds 0-3)
     pretrained_models/**/evaluation_metrics_0.json
-    <row> = resnet50_baseline | swin_foundation | megadescriptor_realweights
+    <row> = resnet50_baseline | swin_foundation | miewid
           | resnet50_skyline_e{30,50}_{zerobased,offset}
 ```
 

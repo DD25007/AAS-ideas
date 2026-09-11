@@ -75,12 +75,8 @@ def compute_jaccard_distance(
 
     V = np.zeros((N, N), dtype=mat_type)
 
-    # O8: the softmax result for each row used to be pulled back with its own .cpu(),
-    # i.e. one GPU->CPU sync per row. Profiled at N=10304 that was 10,305 syncs costing
-    # 17.3s of a 44.7s call -- pure launch latency, since each tensor is only tens of
-    # floats. Batching the transfers is 1.88x faster on this loop (32.4s -> 17.2s) and
-    # bitwise identical: torch.cat + one .cpu() changes no arithmetic, only when the
-    # copy happens. Verified np.array_equal(V_old, V_new) is True at full scale.
+    # Batch the GPU->CPU transfers: one .cpu() per row was 10k syncs of pure launch
+    # latency. torch.cat + a single .cpu() is bitwise identical.
     _pending = []
 
     def _flush():

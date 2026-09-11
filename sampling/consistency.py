@@ -10,18 +10,11 @@ from sklearn.metrics import silhouette_score
 from collections import defaultdict
 import os
 
-# Todo.md R6, ported from spcl/sampling/consistency.py 2026-09-05. Same defect, same fix:
-# this sampler turns sets of *string*-named graph nodes into ordered lists, and Python
-# randomises string hashing per process unless PYTHONHASHSEED is fixed, so the order the
-# annotation budget is spent in varies run to run. `scripts/common.sh` pins
-# PYTHONHASHSEED=0; HITL_SORT_COMPONENTS=1 fixes it in the code instead.
-#
-# This copy is the one `main.py` imports (`train_al.py` imports the spcl one). Keeping the
-# two in sync matters -- W1 was fixed in the spcl copy on 2026-09-02 and sat unfixed here
-# until 2026-09-05 precisely because nobody checked both.
-#
-# Default off: sorting picks a different (equally valid) order than PYTHONHASHSEED=0, so
-# turning it on would move published numbers.
+# This sampler turns sets of *string*-named graph nodes into ordered lists, and Python
+# randomises string hashing per process, so which coarse cluster the annotation budget
+# runs out on varies run to run. The launcher pins PYTHONHASHSEED=0; setting
+# HITL_SORT_COMPONENTS=1 fixes the order in code instead. Off by default: sorting picks
+# a different (equally valid) order and would move published numbers.
 _SORT_COMPONENTS = os.environ.get("HITL_SORT_COMPONENTS", "0") == "1"
 
 

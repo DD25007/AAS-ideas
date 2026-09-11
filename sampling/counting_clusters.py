@@ -38,19 +38,6 @@ class CountingClusters(BaseSampling):
         #     min_diff = float('inf')
         #     closest_pair = (1, n)
 
-        #     # Only need to iterate up to sqrt(n)
-        #     for x in range(1, int(math.sqrt(n)) + 2):
-        #         y = round(n / x)
-        #         product = x * y
-        #         diff = abs(product - n)
-
-        #         if diff < min_diff:
-        #             min_diff = diff
-        #             closest_pair = (x, y)
-
-        #     return closest_pair
-
-        # Nv, Nn = closest_product_pair(self.n)
         Nv = int(np.ceil(math.sqrt(self.n / self.ratio)))
         Nn = int(np.ceil(self.n / Nv))
         time_nested_is = time.time()
@@ -133,14 +120,10 @@ class CountingClusters(BaseSampling):
                     self.cl_pairs.append((v_i, v_j))
                 sum_n_bar += gt_s_ij[v_i][v_j] / q_all[i][v_j]
             n_bar = sum_n_bar / len(sampled_neighbors[i])
-            # W1: the try/except this replaces was broken twice over. sum_n_bar accumulates
-            # numpy scalars, so n_bar == 0 makes `1/n_bar` return inf with a RuntimeWarning
-            # instead of raising -- sum_cc silently became inf, and with it f_hat and NIS's
-            # population estimate K. And when the bare `except` did fire it set `sum_cc = 0`,
-            # discarding every term already summed rather than skipping the offending one.
-            # n_bar == 0 means no sampled neighbour of v_i contributed, so the term is
-            # genuinely undefined: skip it. (Fixed in spcl/sampling/ 2026-09-02; this root
-            # copy, which main.py imports, was missed until 2026-09-05.)
+            # n_bar is a numpy scalar, so n_bar == 0 gives inf rather than raising, and
+            # f_hat (hence NIS's estimate K) silently becomes inf. The term is undefined
+            # when no sampled neighbour contributed: skip it. Mirror any change in
+            # spcl/sampling/counting_clusters.py.
             if n_bar > 0 and Q[v_i] > 0:
                 sum_cc += (1 / n_bar) * (1 / Q[v_i])
         f_hat = sum_cc / len(sampled_vertices)

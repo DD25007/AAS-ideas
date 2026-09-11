@@ -264,12 +264,9 @@ def get_trainer(
         dummy_input = torch.randn(1, 3, size[0], size[1])
         embedding_size = megadescriptor_model(dummy_input).shape[1]
 
-    # FIXME(off-by-one): `extra_classes` exists only to support the skyline label modes --
-    # see the SKYLINE_LABEL_MODE block below. num_classes here comes from
-    # wildlife_tools' pd.factorize (0..N-1), but CustomTrainer.train_epoch (utils.py:1101)
-    # overrides the batch labels with the `pseudo_identity` column, which main.py builds
-    # with a +1. Set extra_classes=1 when keeping that offset, else the last identity
-    # indexes past the classifier and nll_loss trips
+    # extra_classes exists only for the SKYLINE_LABEL_MODE offset: train_epoch overrides
+    # batch labels with `pseudo_identity`, which is built with a +1. Set it to 1 when
+    # keeping that offset, else the last identity indexes past the classifier.
     # `Assertion t >= 0 && t < n_classes failed`.
     n_classes = train_database.num_classes + extra_classes
     if loss_criterion == "softmax":
@@ -282,14 +279,6 @@ def get_trainer(
         objective = TripletLoss(margin=1.0, distance="cosine", mining="hard")
     else:
         raise NotImplementedError
-    # if centroids is None:
-    #     # objective = ClusterLoss(centroids=torch.rand((train_database.num_classes, embedding_size)), embedding_size=embedding_size)
-    #     objective = SoftmaxLoss(num_classes=train_database.num_classes, embedding_size=embedding_size)
-    # else:
-    #     # objective = ClusterLoss(centroids=centroids, embedding_size=embedding_size)
-    #     objective = SoftmaxLoss(num_classes=train_database.num_classes, embedding_size=embedding_size)
-
-    # Optimizer and scheduler configuration
     params = chain(megadescriptor_model.parameters(), objective.parameters())
     optimizer = Adam(params=params, lr=1e-4)
     min_lr = 1e-6
@@ -337,11 +326,8 @@ def main(args):
     )
     database = dataset.get_train_loader()
 
-    # Short tag for the output directory. The known backbones keep their historical tags
-    # so existing result paths stay valid; anything else is slugified rather than rejected.
-    # This used to be a whitelist ending in `raise NotImplementedError`, which failed before
-    # the dataset was even built -- including for the ImageNet Swin models `get_model` itself
-    # substitutes (Todo.md item 16).
+    # Short tag for the output directory. Known backbones keep their historical tags so
+    # existing result paths stay valid; anything else is slugified rather than rejected.
     _KNOWN_SUFFIX = {
         "hf-hub:BVRA/MegaDescriptor-T-224": "mdt",
         "hf-hub:BVRA/MegaDescriptor-L-224": "mdl",
@@ -361,17 +347,10 @@ def main(args):
         )
 
     use_combined_dataset = args.dataset == "combined"
-    # NOTE(foundation-rows): get_model(combined=True) swaps MegaDescriptor-L-224 for a plain
-    # ImageNet swin_large_patch4_window7_224 ("Do not use pre-trained megadescriptor",
-    # utils.py:923). This looks like a bug that makes the zero-shot foundation rows of
-    # Table 1 impossible to produce -- it is NOT. Measured over 4 gallery splits against
-    # the paper's 45.65 mAP / 56.46 Top-1 foundation row:
-    #     ImageNet Swin-L (this swap) : 44.46 mAP (-1.19), 56.62 Top-1 (+0.16)
-    #     MegaDescriptor real weights : 53.34 mAP (+7.69), 67.77 Top-1 (+11.31)
-    # with split noise of only +/-0.16-0.34 mAP. Table 1's "MegaDescriptor" row therefore
-    # measures ImageNet Swin-L, and the substitution is what the published numbers went
-    # through. LEAVE IT IN PLACE. A previous local change bypassed it for --baseline; that
-    # was reverted once the above was measured. See README and Todo.md item 15.
+    # get_model(combined=True) swaps MegaDescriptor-L-224 for plain ImageNet Swin-L. This
+    # looks like a bug that breaks Table 1's foundation rows -- it is NOT. Measured against
+    # the paper's 45.65 mAP: ImageNet Swin-L gives 44.46, real MegaDescriptor weights 53.34.
+    # The published row is ImageNet Swin-L, so LEAVE THE SWAP IN PLACE.
     megadescriptor_model = get_model(
         args.model_name,
         eval=args.eval_only,
@@ -388,16 +367,11 @@ def main(args):
         database.metadata.loc[:, "original_index"] = database.metadata.index
         unique_ids = list(database.metadata.identity.unique())
         print(unique_ids)
-        # FIXME(off-by-one): the original `+1` makes pseudo_identity run 1..N while
-        # SoftmaxLoss gets num_classes=N from pd.factorize (0..N-1), so the last identity
-        # indexes past the classifier and training dies ~150 batches in with
-        #   nll_loss_forward: Assertion `t >= 0 && t < n_classes` failed.
-        # The offset looks intended to reserve 0 for "unassigned", which matters in the AL
-        # path where constrained_clustering emits -1 for outliers, but the skyline is fully
-        # supervised so every image has a real identity and the offset only shifts labels.
-        # Two ways to make it consistent, selected by SKYLINE_LABEL_MODE:
-        #   zerobased (default) -> labels 0..N-1, num_classes = N      (smaller change)
-        #   offset              -> labels 1..N,   num_classes = N + 1  (keeps a dead class 0)
+        # The original `+1` makes pseudo_identity run 1..N while SoftmaxLoss gets
+        # num_classes=N, so the last identity indexes past the classifier and training dies.
+        # SKYLINE_LABEL_MODE picks the fix:
+        #   zerobased (default) -> labels 0..N-1, num_classes = N
+        #   offset              -> labels 1..N,   num_classes = N + 1 (keeps a dead class 0)
         # database.metadata.loc[:, "pseudo_identity"] = [unique_ids.index(x)+1 for x in database.metadata.identity.values]
         _label_mode = os.environ.get("SKYLINE_LABEL_MODE", "zerobased")
         _offset = 1 if _label_mode == "offset" else 0
@@ -464,14 +438,8 @@ def main(args):
         folder = os.path.join(
             args.out_dir, "pretrained_models", args.dataset, run_suffix, "skyline"
         )
-        # FIXME(stale-signature): called with 3 args but utils.py:1367 defines
-        #   get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch)
-        # -> TypeError: missing 1 required positional argument: 'epoch'. The --skyline path
-        # cannot run as shipped. This is the THIRD site with the same stale call:
-        # SpCL/examples/spcl_train_usl.py:162,268,295 and RTMem/examples/RTMem_train_usl.py:332,360
-        # have it too -- `epoch` was added to the signature and only some callers updated.
-        # Using -1 to match the sibling --baseline call at the bottom of this block.
-        # results = get_evaluation_results(megadescriptor_extractor, dataset, folder)
+        # Shipped without the `epoch` arg, so --skyline could not run. -1 matches the
+        # sibling --baseline call below.
         results = get_evaluation_results(megadescriptor_extractor, dataset, folder, -1)
 
     elif args.baseline:

@@ -1,87 +1,69 @@
-# Launcher scripts
+# Launchers
 
-Everything that produced the Table 1 reproduction in [`../README.md`](../README.md).
+Everything runs through one script.
 
-Rescued on 2026-09-01 from an ephemeral session scratchpad under `/tmp` — they were never
-under version control, so the exact flags, thread caps and VRAM gate behind every published
-number were one `/tmp` cleanup away from being lost.
-
-## Layout
-
-| script | what it does |
+| file | role |
 |---|---|
-| `common.sh` | shared config + GPU scheduling helpers; sourced by everything else |
-| `run_grid.sh` | one AL run — `run_grid.sh <SAMPLER\|USL> <SEED> <GPU> <OUTROOT>` |
-| `run_row.sh` | one baseline / foundation / skyline row — `run_row.sh <ROW> <SEED> <GPU> <OUTROOT>` |
-| `queue.sh` | 1-job-per-GPU queue with VRAM gate + auto-retry — `queue.sh <al\|row> <OUTROOT> [jobs...]` |
-| `clean_logs.sh` | delete logs from runs that never reached the `mean,` summary |
+| `run.sh` | the only entry point — list / status / one / queue / clean |
+| `common.sh` | shared config: interpreter, paths, thread caps, GPU gate. Sourced, never run |
+| `outputs.sh` | manage output trees that live on `/scratch` behind a symlink |
 
-## One-time setup
-
-`dataroot/` is a machine-specific symlink holding absolute paths, so it is gitignored and
-must be recreated on each machine:
+## Running the full Table 1
 
 ```bash
-mkdir -p dataroot && ln -sfn /storage/dd25007/dataset dataroot/wildlife
+bash scripts/run.sh queue /scratch/dd25007/HITL-ReID/outputs_final
 ```
 
-That gives the SpCL wildlife loader the `<data-dir>/wildlife/wildlifereid-10k/metadata.csv`
-path it expects. Point it wherever WildlifeReID-10k actually lives, or override `DATAROOT`.
-
-## Running the full reproduction
+52 jobs: 6 AL samplers x seeds 1-4, plus 7 non-AL rows x seeds 0-3. It places one job per
+GPU, only on devices with `MIN_FREE_MIB` free, retries anything that dies, and adopts jobs
+already running so it is safe to restart.
 
 ```bash
-tmux new-session -d -s q_al  "bash scripts/queue.sh al  outputs_new"   # 24 AL runs,  ~12h each
-tmux new-session -d -s q_row "bash scripts/queue.sh row outputs_new"   # 24 row runs, ~15min-4h
+bash scripts/run.sh list                      # the job list
+bash scripts/run.sh status  <OUTROOT>         # done / running / pending
+bash scripts/run.sh clean   <OUTROOT>         # drop incomplete logs and .failed dirs
+bash scripts/run.sh one al:ConSam:1 0 <OUT>   # one job, foreground, on GPU 0
 ```
 
-Both queues can run at once — GPU ownership is arbitrated through the shared
-`hitl_*_g<N>_*` tmux session naming in `common.sh`, so neither will place a second job on a
-GPU the other is already using.
+A job is `<kind>:<name>:<seed>`:
 
-Single job, no queue:
+- `al:<sampler>:<seed>` — `USL random GBAS LBAS CC ConSam`, seeds 1-4.
+  `USL` is the SpCL (Base) row and passes no `-s` at all.
+- `row:<row>:<seed>` — seeds 0-3. Here the seed is `--sample_seed`, which varies the 20%
+  held-out gallery split; `--seed` (training) is pinned at 1. The README's +/- averages
+  over exactly this.
+
+## Knobs
 
 ```bash
-bash scripts/run_grid.sh ConSam 1 0 outputs_new          # AAS, seed 1, GPU 0
-bash scripts/run_row.sh  resnet50_baseline 0 0 outputs_new
+MIN_FREE_MIB=20000 GPUS="0 1 2 3" bash scripts/run.sh queue <OUTROOT>
+MAX_JOBS_PER_GPU=2 bash scripts/run.sh queue <OUTROOT>
+PYTHON=/storage/dd25007/conda_envs/hitl-modern/bin/python bash scripts/run.sh one ...
 ```
 
-## Output layout
+The VRAM gate is not cosmetic. Measured demand is ~9.3 GiB per job (6.1-7.7 GiB resident
+plus a ~1.5 GiB faiss `StandardGpuResources` temporary during `compute_jaccard_distance`).
+That temporary is what OOM-killed nine runs overnight on 2026-08-30, and four more when
+`MAX_JOBS_PER_GPU=3` was tried — concurrent jobs hit their faiss spike together, so
+per-job headroom is not additive. The 16 GiB default leaves ~70% headroom for a co-tenant
+that grows *after* placement, which a launch-time check cannot otherwise cover.
 
-Both runners write `<OUTROOT>/{al,table1}/<row>/s<seed>/`, matching the frozen baseline in
-`outputs_initial/`, so `aggregate_results.py --compare outputs_initial outputs_new` is a
-straight tree walk.
+## Two rows that are not what they look like
 
-## Configuration
+`miewid` runs under its own interpreter (`MIEWID_PYTHON`, default `hitl-miewid`) because
+the model loads via `trust_remote_code` and its modelling code predates the transformers 5
+loader (Todo.md item 14). `run.sh` selects it per job — nothing else needs to change.
 
-Every knob in `common.sh` is overridable from the environment:
+`swin_foundation` *is* the MegaDescriptor row. `get_model` substitutes plain ImageNet
+Swin-L for `MegaDescriptor-L-224` whenever `--dataset combined`, so naming the model
+directly reaches identical weights by a shorter path. That substitution is the authors'
+and is intended (Todo.md item 15). `megadescriptor_realweights` is deliberately absent
+from the grid: it needs a `--baseline` bypass of that swap which has since been reverted,
+so it cannot be re-run.
 
-```bash
-PYTHON=/storage/dd25007/conda_envs/alm/bin/python  bash scripts/queue.sh row outputs_alm
-GPUS="0 1 2 3"  MIN_FREE_MIB=20000  bash scripts/queue.sh al outputs_new
-```
+## If you rename a tmux session
 
-- `PYTHON` — defaults to the `hitl` env. Point it at `alm` to re-run under the original
-  reproduction environment.
-- `DATAROOT` — `$REPO/dataroot`, whose `wildlife` symlink gives the SpCL loader the
-  `<data-dir>/wildlife/wildlifereid-10k/metadata.csv` path it expects.
-- `DATASET_PATH` — the dataset root `main.py` takes directly.
-- `MAX_JOBS_PER_GPU` — 1 by default. Measured per-job demand is ~9.3 GiB peak, so an H200
-  (140 GiB) fits several; `MAX_JOBS_PER_GPU=3` triples grid throughput when the GPUs are
-  otherwise idle. The VRAM gate is applied per slot, so a GPU is only chosen if it has
-  `MIN_FREE_MIB` free *at that moment* — co-tenants already count in `used`.
-- `MIN_FREE_MIB` — 16000. Peak real demand is ~9.3 GiB (6.1 GiB resident + a ~1.5 GiB faiss
-  `StandardGpuResources` temporary during `compute_jaccard_distance`); the headroom covers a
-  co-tenant that grows *after* we launch, which a launch-time check cannot otherwise catch.
-- `OMP_NUM_THREADS` and friends — 8. Left unset, each process sizes its BLAS pool to all 224
-  cores; with 8 concurrent jobs the load average hit 715.
-
-## Two rows that cannot currently be re-run
-
-`run_row.sh` refuses both rather than silently writing wrong numbers under a right-looking
-directory name:
-
-- **`megadescriptor`** — needs an opt-out of the `get_model` MegaDescriptor→Swin-L swap that
-  no longer exists (see `../README.md` and Todo.md item 15). Without it the row would
-  duplicate `swin_foundation`.
-- **`miewid`** — blocked on transformers 5.x (Todo.md item 14).
+`run.sh` names sessions `hitl_<kind>_<name>_<seed>_g<gpu>` and `common.sh`'s `gpu_jobs()`
+matches on that `_g<gpu>` suffix. The two must stay in step: when they did not, `gpu_jobs()`
+counted zero for every device and `MAX_JOBS_PER_GPU` silently stopped applying — three jobs
+landed on one GPU before it was noticed.

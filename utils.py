@@ -577,49 +577,6 @@ def FINCH(
     return c
 
 
-# def constrained_finch(database_features, ml_pairs, cl_pairs, initial_clustering=None, thresh=0.05, sanity_check=False):
-#     """FINCH clustering with must-link and cannot-link constraints."""
-#
-#     if initial_clustering is None:
-#         # Constrained FINCH clustering for finest level of hierarchy
-#         adj, orig_dist_ = clust_rank(database_features,
-#                                      ml_pairs=ml_pairs,
-#                                      initial_rank=None,
-#                                      distance='cosine',
-#                                      thresh=thresh)
-#         initial_clustering, num_clust = get_clust(adj, [], None, ml_pairs=ml_pairs, cl_pairs=cl_pairs)
-#     else:
-#         initial_clustering[initial_clustering == -1] = np.arange(initial_clustering.max() + 1, initial_clustering.max() + 1 + sum(initial_clustering == -1))
-#
-#     labels, mat = get_merge([], initial_clustering, database_features)
-#
-#     unique, counts = np.unique(labels, return_counts=True)
-#     singleton_labels = unique[counts == 1]
-#     mask = np.isin(labels, singleton_labels)
-#     labels[mask] = -1
-#
-#     # Step 4: Renumber cluster labels to be consecutive
-#     unique_labels = np.unique(labels)
-#     unique_labels = unique_labels[unique_labels != -1]
-#     label_map = {old: new for new, old in enumerate(unique_labels)}
-#     for old, new in label_map.items():
-#         labels[labels == old] = new
-#
-#     if sanity_check:
-#         # Sanity check for constraints
-#         for (a, b) in ml_pairs:
-#             if labels[a] != labels[b]:
-#                 print(f"{a}, {b}, {labels[[a, b]]}")
-#                 # import pdb;
-#                 # pdb.set_trace()
-#             assert labels[a] == labels[b], "must-link constraint violated. Implementation error"
-#         for (a, b) in cl_pairs:
-#             if labels[a] == labels[b] and labels[a] != -1:
-#                 print(f"{a}, {b}, {labels[[a, b]]}")
-#                 # import pdb;
-#                 # pdb.set_trace()
-#             assert labels[a] != labels[b] or labels[a] == -1, "cannot-link constraint violated. Implementation error"
-#     return labels
 
 
 class EpochCheckpoint:
@@ -663,122 +620,6 @@ class EpochCheckpoint:
             )
 
 
-# def get_clust(a, orig_dist=[], min_sim=None, ml_pairs=[], cl_pairs=[]):
-#     """
-#     Get clusters from adjacency matrix a (Borrowed from FINCH)
-#     :param a: AA' where A is the Adjacency Matrix
-#     :param orig_dist: (optional) Pair-wise distance matrix (used only when min_sim is not None)
-#     :min_sim: (optional) similarity threshold for valid edge connections
-#     """
-#     if min_sim is not None:
-#         a[np.where((orig_dist * a.toarray()) > min_sim)] = 0
-#     num_clust, labels = sp.csgraph.connected_components(csgraph=a, directed=True, connection='weak', return_labels=True)
-#     cluster_id = np.max(labels) + 1
-#     cl_set = set(cl_pairs) | set((b, a) for a, b in cl_pairs)
-#     for (a, b) in cl_set:
-#         if labels[a] == labels[b]:
-#             clust_points = np.where(labels == labels[a])[0]
-#             clust_point_pairs = list(itertools.product(clust_points, clust_points))
-#             clust_cl_pairs = set(clust_point_pairs).intersection(cl_set)
-#             clust_ml_pairs = set(clust_point_pairs).intersection(set(ml_pairs))
-#             # Step 1: ML graph
-#             ml_graph = nx.Graph()
-#             ml_graph.add_nodes_from(clust_points)
-#             ml_graph.add_edges_from(clust_ml_pairs)
-#             # Step 2: Find ML components
-#             ml_components = list(nx.connected_components(ml_graph))
-#             comp_map = {pt: idx for idx, comp in enumerate(ml_components) for pt in comp}
-#             # Step 3: Build conflict graph (over components)
-#             conflict_graph = nx.Graph()
-#             conflict_graph.add_nodes_from(range(len(ml_components)))
-#             for (a, b) in clust_cl_pairs:
-#                 ca, cb = comp_map[a], comp_map[b]
-#                 if ca != cb:
-#                     conflict_graph.add_edge(ca, cb)
-#             coloring = nx.coloring.greedy_color(conflict_graph, strategy="largest_first")
-#             label_map = {}
-#             for pt in clust_points:
-#                 if label_map.get(coloring[comp_map[pt]]) is None:
-#                     label_map[coloring[comp_map[pt]]] = cluster_id
-#                     cluster_id += 1
-#                 labels[pt] = label_map[coloring[comp_map[pt]]]
-#     # Step 4: Renumber cluster labels to be consecutive
-#     unique_labels = np.unique(labels)
-#     unique_labels = unique_labels[unique_labels != -1]
-#     label_map = {old: new for new, old in enumerate(unique_labels)}
-#     for old, new in label_map.items():
-#         labels[labels == old] = new
-#     return labels, num_clust
-#
-#
-# def cool_mean(M, u):
-#     """
-#     Compute mean of the cluster embeddings to get the cluster embedding (Borrowed from FINCH)
-#     :param M: Feature embeddings for the data points
-#     :param u: Clusters
-#     """
-#
-#     s = M.shape[0]
-#     un, nf = np.unique(u, return_counts=True)
-#     umat = sp.csr_matrix((np.ones(s, dtype='float32'), (np.arange(0, s), u)), shape=(s, len(un)))
-#     return (umat.T @ M) / nf[..., np.newaxis]
-#
-#
-# def get_merge(c, u, data):
-#     """Merge datapoints in the clusters for hierarchical clustering (Borrowed from FINCH)"""
-#     if len(c) != 0:
-#         _, ig = np.unique(c, return_inverse=True)
-#         c = u[ig]
-#     else:
-#         c = u
-#
-#     mat = cool_mean(data, c)
-#     return c, mat
-#
-#
-# def clust_rank(
-#         mat,
-#         ml_pairs=[],
-#         initial_rank=None,
-#         distance='cosine',
-#         thresh=0.05):
-#     """ (Borrowed from FINCH)"""
-#     s = mat.shape[0]
-#     if initial_rank is not None:
-#         orig_dist = np.empty(shape=(1, 1))
-#     else:
-#         orig_dist = metrics.pairwise.pairwise_distances(mat, mat, metric=distance)
-#         # Step 1: Filter by cosine threshold
-#         # orig_dist[orig_dist > thresh] = 1e13
-#
-#         # # Step 2: Build a set for fast lookup
-#         # forbidden = set(cl_pairs) | set((j, i) for (i, j) in cl_pairs)
-#         #
-#         # # Step 3: Process cannot-link constraints
-#         # for i in range(s):
-#         #     neighbors = np.where(orig_dist[i] <= thresh)[0]  # exclude 0 and self-loop
-#         #     for j in neighbors:
-#         #         if (i, j) in forbidden:
-#         #             orig_dist[i, neighbors] = 1e13
-#         #             orig_dist[neighbors, i] = 1e13  # remove both incoming and outgoing edges
-#         #             break
-#
-#         # Set self loop weights to be smaller than cannot-link constraints but higher than threshold
-#         np.fill_diagonal(orig_dist, 1e12)
-#         initial_rank = np.argmin(orig_dist, axis=1)
-#
-#     # The Clustering Equation
-#     A = sp.csr_matrix((np.ones_like(initial_rank, dtype=np.float32), (np.arange(0, s), initial_rank)), shape=(s, s))
-#     # Step 4: Process must-link constraints
-#     for (a, b) in ml_pairs:
-#         A[a, b] = 1
-#         A[b, a] = 1
-#     A = A + sp.eye(s, dtype=np.float32, format='csr')
-#     A = A @ A.T
-#
-#     A = A.tolil()
-#     A.setdiag(0)
-#     return A, orig_dist
 
 
 def get_model(model_name, eval=True, combined=False, drop_rate=0.2):
@@ -973,16 +814,9 @@ class CustomTrainer(BasicTrainer):
 
             out = model(x)
             loss = self.objective(out, y)
-            # HITL_BASICTRAINER_ACCUM=1 restores the accumulation semantics of the
-            # BasicTrainer this class overrides (Todo.md item 13):
-            #   * scale the loss by accumulation_steps -- without it, N unscaled backward
-            #     passes accumulate before each step, so the effective gradient is N x
-            #     larger (N=2 here), equivalent to doubling the learning rate;
-            #   * step on (i+1) % N rather than (i-1) % N -- identical for N in {1,2},
-            #     divergent for N >= 3;
-            #   * flush leftover gradients at epoch end instead of discarding them.
-            # Default is OFF so existing results are unchanged; this exists to test whether
-            # the skyline's overshoot (+1.6 to +4.3 mAP) is caused by the missing scaling.
+            # HITL_BASICTRAINER_ACCUM=1 restores BasicTrainer's accumulation semantics:
+            # scale the loss, step on (i+1) % N, and flush leftover gradients at epoch end.
+            # Off by default. Tested as a cause of the skyline overshoot -- it is not one.
             if _BASICTRAINER_ACCUM:
                 (loss / self.accumulation_steps).backward()
                 step_now = (i + 1) % self.accumulation_steps == 0
@@ -996,14 +830,6 @@ class CustomTrainer(BasicTrainer):
 
             losses.append(loss.detach().cpu())
 
-            # # compute training accuracy
-            # model.eval()
-            # with torch.no_grad():
-            #     out = model(x)
-            #     out = self.objective.linear(out)
-            #     pred = torch.argmax(out, dim=1)
-            #     acc = (pred == y).float().mean()
-            #     epoch_data["train_acc"].append(acc.item())
             epoch_data["train_acc"].append(
                 [0.0]
             )  # Placeholder for accuracy, as we are not computing it for now
@@ -1021,17 +847,12 @@ class CustomTrainer(BasicTrainer):
         # EVERY epoch and overwrites self.pseudo_labels (and dataset.metadata['identity'])
         # with ConSam/DBSCAN cluster ids -- which contain -1 for outliers. That is correct
         # for the AL path, where refreshing pseudo-labels each epoch is the entire point.
-        # It is wrong for --skyline, which is fully supervised on 100% of the ground-truth
-        # identities: after epoch 0 the real labels are discarded, and epoch 1 feeds -1
-        # into nll_loss ->
-        #     Assertion `t >= 0 && t < n_classes` failed
-        # (the cluster count also need not match num_classes). This is why every skyline
-        # run died at epoch 1 batch 0 while epoch 0 completed cleanly.
+        # It is wrong for --skyline, which is fully supervised: after epoch 0 the real
+        # labels are discarded and epoch 1 feeds -1 into nll_loss.
         #
         # CAUTION: skipping this is a WORKAROUND, not a validated reproduction of the
-        # authors' skyline. It is not known how they produced Table 1's 64.29% mAP row,
-        # and this path cannot have been run as shipped. Treat skyline numbers obtained
-        # this way as indicative only.
+        # authors' skyline -- this path cannot have been run as shipped. Treat skyline
+        # numbers as indicative only.
         if _BASICTRAINER_ACCUM and last_i >= 0 and (last_i + 1) % self.accumulation_steps:
             self.optimizer.step()   # flush leftover gradients, as BasicTrainer does
             self.optimizer.zero_grad()
@@ -1311,15 +1132,9 @@ def _subset_name(dataset):
 def get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
     """Evaluate, then put the extractor's model back on the device it started on.
 
-    Todo.md item 11: `wildlife_tools`' `DeepFeatures.__call__` ends with
-    `self.model = self.model.to("cpu")` (`wildlife_tools/data/cache.py:84` in 1.0.3), and
-    `self.model` is the *same object* the caller is training -- so every evaluation silently
-    strands the model on the CPU. `train_al.py:684` patched that at one of the six call
-    sites; `main.py:237` did not, and it sits inside `for budget in range(...)`, so the
-    authors' own `main.py` AL loop leaves the model on the CPU after every cycle.
-
-    Restoring here fixes all six sites at once and is a no-op where the caller already did
-    it. Device placement cannot change any computed value, so this moves no metric.
+    wildlife_tools' DeepFeatures.__call__ ends with `self.model.to("cpu")` on the caller's
+    own model, stranding it on the CPU after every eval. Handling it here covers all call
+    sites; device placement changes no computed value.
     """
     _model = getattr(megadescriptor_extractor, "model", None)
     try:
@@ -1354,12 +1169,9 @@ def _get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         "ROC AUC": [],
     }
     step = 0.01
-    # O7: this loop used to sweep 103 thresholds, but only two are ever read back:
-    # baks[-inf], baks[0.7] and baus[0.7]. The other 101 BAKS/BAUS evaluations were
-    # computed and discarded, and the dicts are never serialised. Profiled at 19m06s
-    # per 50-epoch AL run (6 evals x ~3m); evaluating just the two needed thresholds
-    # is output-identical and ~50x cheaper. Set HITL_FULL_THRESHOLD_SWEEP=1 to restore
-    # the full curve if it is ever wanted for a plot.
+    # Only baks[-inf], baks[0.7] and baus[0.7] are ever read back, so sweeping all 103
+    # thresholds computed and discarded 101 of them. HITL_FULL_THRESHOLD_SWEEP=1 restores
+    # the full curve for plotting.
     if os.environ.get("HITL_FULL_THRESHOLD_SWEEP", "").lower() in ("1", "true", "yes"):
         ts = [-np.inf] + list(np.round(np.arange(0, 1 + step / 10, step), 2)) + [np.inf]
     else:
@@ -1471,11 +1283,6 @@ def _get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
         _global_closed_meta = dataset.default_closed_query.metadata
 
         for dataset_name in dataset.csv["dataset"].unique():
-            # print("Extracting features for default closed query...")
-            # filter dataset
-            # O6: these three are `dataset == @dataset_name` row subsets of the three
-            # sets already encoded above, so slice the global features instead of
-            # re-encoding all ~21k images once more per dataset.
             filtered_closed_query = dataset.default_closed_query.metadata.query(
                 "dataset == @dataset_name"
             )
@@ -1571,16 +1378,6 @@ def _get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
             roc_score = auc_roc_new_class(y_true_w_new, scores, new_individual)
 
-            # print("Top 1 accuracy:", (float(cmc[0]) * 100))
-            # print("Top 3 accuracy:", (float(cmc[2]) * 100))
-            # print("Top 5 accuracy:", (float(cmc[4]) * 100))
-            # print("Top 10 accuracy:", (float(cmc[9]) * 100))
-            # print("mAP:", mAP)
-            # print("mINP:", mINP)
-            # print(f'BAKS = {np.mean(baks[-np.inf])}')
-            # print(f'BAUS@0.7 = {np.mean(baus[0.7])}')
-            # print(f'Normalized accuracy@0.7 = {np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7]))}')
-            # print(f'ROC AUC score = {roc_score}')
             print(
                 f"{dataset_name},{cmc[0] * 100:.2f},{cmc[2] * 100:.2f},{cmc[4] * 100:.2f},{cmc[9] * 100:.2f},{mAP:.4f},{mINP:.4f},{np.mean(baks[-np.inf]):.4f},{np.mean(baus[0.7]):.4f},{np.sqrt(np.mean(baks[0.7]) * np.mean(baus[0.7])):.4f},{roc_score:.4f}"
             )
@@ -1612,12 +1409,7 @@ def _get_evaluation_results(megadescriptor_extractor, dataset, folder, epoch):
 
     else:
         step = 0.01
-        # O7: this loop used to sweep 103 thresholds, but only two are ever read back:
-        # baks[-inf], baks[0.7] and baus[0.7]. The other 101 BAKS/BAUS evaluations were
-        # computed and discarded, and the dicts are never serialised. Profiled at 19m06s
-        # per 50-epoch AL run (6 evals x ~3m); evaluating just the two needed thresholds
-        # is output-identical and ~50x cheaper. Set HITL_FULL_THRESHOLD_SWEEP=1 to restore
-        # the full curve if it is ever wanted for a plot.
+        # See above: only two thresholds are read back.
         if os.environ.get("HITL_FULL_THRESHOLD_SWEEP", "").lower() in (
             "1",
             "true",

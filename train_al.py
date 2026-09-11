@@ -6,6 +6,7 @@ import random
 import numpy as np
 import sys
 import collections
+import json
 import time
 from datetime import timedelta
 
@@ -31,16 +32,18 @@ from spcl.utils.logging import Logger
 from spcl.utils.serialization import load_checkpoint, save_checkpoint
 from spcl.utils.faiss_rerank import compute_jaccard_distance
 
+# [record] per-run experiment record (see spcl/utils/run_record.py)
+from spcl.utils.run_record import RunRecord, dataset_of_train_index
+
 from spcl.sampling.random import RandomSampling
 
-# NOTE: the AL samplers live in spcl.sampling, renamed from the former SpCL/sampling/ so
-# they can no longer be shadowed by the repo-root `sampling` package (Todo.md item 12).
-# The MinMax/ExploreConsolidate branches that used to sit in the dispatch below were
-# removed on 2026-09-01: they referenced names this file never imports, and the only
-# implementations in the repo (sampling/assc.py) take (database, n, gallery_size) rather
-# than args=, so they could never have been constructed here. Not paper baselines.
+# The AL samplers live in spcl.sampling so the repo-root `sampling` package cannot shadow them.
 from spcl.sampling.balanced import LBAS, GBAS
 from spcl.sampling.consistency import ConsistencySampling
+
+# [new-arms] ablation samplers; neither touches the originals
+from spcl.sampling.consistency_p1 import ConsistencySamplingP1
+from spcl.sampling.simband import SimilarityBandSampling
 from spcl.sampling.counting_clusters import CountingClusters
 
 from utils import get_evaluation_results
@@ -48,9 +51,20 @@ from utils import get_evaluation_results
 from wildlife_tools.features import DeepFeatures
 
 
-def get_data(name, data_dir, subset="combined"):
+def get_data(name, data_dir, subset="combined", split_seed=0, partition_seed=102):
     root = osp.join(data_dir, name)
-    dataset = datasets.create(name, root, subset=subset)
+    # [--split-seed] Plumb the data-split seed through. It was previously dropped here,
+    # so Wildlife fell back to its default of 0 on every run and --seed never reached
+    # the split. Default 0 keeps existing behaviour byte-identical.
+    # [--partition-seed] 102 = the labelled/unlabelled identity partition every
+    # published run used; exposed so it can be varied deliberately, not by accident.
+    dataset = datasets.create(
+        name,
+        root,
+        subset=subset,
+        dataset_split_seed=split_seed,
+        partition_seed=partition_seed,
+    )
     return dataset
 
 
@@ -138,10 +152,17 @@ def _ckpt(tag, arr):
     import numpy as _np
     import torch as _torch
 
-    a = arr.detach().cpu().numpy() if isinstance(arr, _torch.Tensor) else _np.asarray(arr)
+    a = (
+        arr.detach().cpu().numpy()
+        if isinstance(arr, _torch.Tensor)
+        else _np.asarray(arr)
+    )
     a = _np.ascontiguousarray(a)
-    print(f"CKSUM {tag}: shape={a.shape} sha={hashlib.sha256(a.tobytes()).hexdigest()[:20]} "
-          f"sum={float(a.sum()):.10g}", flush=True)
+    print(
+        f"CKSUM {tag}: shape={a.shape} sha={hashlib.sha256(a.tobytes()).hexdigest()[:20]} "
+        f"sum={float(a.sum()):.10g}",
+        flush=True,
+    )
 
 
 def create_model(args):
@@ -177,15 +198,9 @@ def main_worker(args):
     global start_epoch, best_mAP
     start_time = time.monotonic()
 
-    # R6: this line used to sit 9 lines below `cudnn.deterministic = True` and silently
-    # defeat it -- benchmark mode re-enables nondeterministic algorithm selection. The
-    # consequence was measured, not assumed: two identical runs with the same --seed
-    # diverged at epoch 0, *before any gradient step* (2287 vs 2281 clusters), and that
-    # propagated to ~1 mAP by epoch 52. An AL run did not reproduce against itself, so no
-    # refactor could ever be validated by re-running one.
-    #
-    # Measured cost of turning autotuning off on this workload: -0.3% (2.38 -> 2.37
-    # ms/step), i.e. nothing. Set HITL_CUDNN_BENCHMARK=1 to restore the old behaviour.
+    # Must stay above `cudnn.deterministic`: benchmark mode re-enables nondeterministic
+    # algorithm selection and silently defeats it. Costs -0.3% on this workload.
+    # HITL_CUDNN_BENCHMARK=1 restores autotuning.
     cudnn.benchmark = os.environ.get("HITL_CUDNN_BENCHMARK", "").lower() in (
         "1",
         "true",
@@ -198,7 +213,10 @@ def main_worker(args):
     # Create datasets
     iters = args.iters if (args.iters > 0) else None
     print("==> Load unlabeled dataset")
-    dataset = get_data(args.dataset, args.data_dir, args.subset)
+    # [--split-seed] forward the split seed (see get_data)
+    dataset = get_data(
+        args.dataset, args.data_dir, args.subset, args.split_seed, args.partition_seed
+    )
     test_loader = get_test_loader(
         dataset, args.height, args.width, args.batch_size, args.workers
     )
@@ -234,12 +252,25 @@ def main_worker(args):
             num_gt_ids_gallery=np.unique(np.array(dataset.gallery)[:, 1]).shape[0],
             args=args,
         )
+    # [new-arms] AAS reading FINCH at a coarser partition
+    elif args.sampler == "ConSamP1":
+        sampler = ConsistencySamplingP1(
+            thresh=args.eps,
+            min_samples=4,
+            metric="precomputed",
+            num_gt_ids_gallery=np.unique(np.array(dataset.gallery)[:, 1]).shape[0],
+            args=args,
+        )
+    # [new-arms] clustering-free similarity-band null model
+    elif args.sampler == "SimBand":
+        sampler = SimilarityBandSampling(args=args)
     elif args.sampler in (None, "None"):
         sampler = None
     else:
         raise ValueError(
             f"unknown --sampler {args.sampler!r}. Expected one of: "
-            "random, GBAS, LBAS, CC (NIS), ConSam (AAS) -- or omit -s entirely for the "
+            "random, GBAS, LBAS, CC (NIS), ConSam (AAS), ConSamP1, SimBand -- or omit "
+            "-s entirely for the "
             "SpCL USL baseline. Falling through to sampler=None would silently run plain "
             "USL and write it into a directory named for an AL method."
         )
@@ -275,10 +306,17 @@ def main_worker(args):
             [features[f].unsqueeze(0) for f, _, _ in sorted(dataset.train)], 0
         )
         memory.features = F.normalize(features, dim=1).cuda()
-        _ckpt('memory_features', memory.features)
+        _ckpt("memory_features", memory.features)
         if gt_labels is None and sampler is not None:
             gt_labels = [pid for _, pid, _ in sorted(dataset.train)]
             sampler.set_gt_labels(gt_labels)
+        # [record] start the run record once the pool is fixed
+        record = RunRecord(
+            args.logs_dir,
+            args,
+            len(dataset.train),
+            pair_dataset=dataset_of_train_index(dataset),
+        )
         del cluster_loader, features
 
         # Evaluator
@@ -309,7 +347,7 @@ def main_worker(args):
                 )
                 features = memory.features.clone()
                 rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
-                _ckpt(f'epoch{epoch}_rerank', rerank_dist)
+                _ckpt(f"epoch{epoch}_rerank", rerank_dist)
 
                 if epoch % (args.eval_step) == 0 and sampler is not None:
                     if args.sampler == "None":
@@ -323,6 +361,14 @@ def main_worker(args):
                     print("#Constraints:", len(ml_pairs) + len(cl_pairs))
                     print("#ML Constraints:", len(ml_pairs))
                     print("#CL Constraints:", len(cl_pairs))
+                    # [record] persist this AL cycle
+                    _r = record.cycle(epoch, sampler, ml_pairs, cl_pairs)
+                    print(
+                        "[record]",
+                        json.dumps(
+                            {k: v for k, v in _r.items() if k != "dataset_endpoints"}
+                        ),
+                    )
 
                 if epoch == 0:
                     # DBSCAN cluster
@@ -346,7 +392,7 @@ def main_worker(args):
 
                 # select & cluster images as training set of this epochs
                 pseudo_labels = cluster.fit_predict(rerank_dist)
-                _ckpt(f'epoch{epoch}_labels', pseudo_labels)
+                _ckpt(f"epoch{epoch}_labels", pseudo_labels)
                 pseudo_labels_tight = cluster_tight.fit_predict(rerank_dist)
                 pseudo_labels_loose = cluster_loose.fit_predict(rerank_dist)
                 num_ids = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
@@ -503,8 +549,8 @@ def main_worker(args):
                 R_indep = 1 - torch.min(label_sim, label_sim_loose).sum(-1) / torch.max(
                     label_sim, label_sim_loose
                 ).sum(-1)
-                _ckpt(f'epoch{epoch}_Rcomp', R_comp)
-                _ckpt(f'epoch{epoch}_Rindep', R_indep)
+                _ckpt(f"epoch{epoch}_Rcomp", R_comp)
+                _ckpt(f"epoch{epoch}_Rindep", R_indep)
                 assert (R_comp.min() >= 0) and (R_comp.max() <= 1)
                 assert (R_indep.min() >= 0) and (R_indep.max() <= 1)
 
@@ -525,7 +571,7 @@ def main_worker(args):
                 cluster_R_indep = [
                     min(cluster_R_indep[i]) for i in sorted(cluster_R_indep.keys())
                 ]
-                _ckpt(f'epoch{epoch}_clusterRindep', np.array(cluster_R_indep))
+                _ckpt(f"epoch{epoch}_clusterRindep", np.array(cluster_R_indep))
                 cluster_R_indep_noins = [
                     iou
                     for iou, num in zip(cluster_R_indep, sorted(cluster_img_num.keys()))
@@ -561,10 +607,12 @@ def main_worker(args):
                         outliers += 1
 
                 # Impose ML and CL constraints on the final pseudo labels
-                _ckpt(f'epoch{epoch}_preNP3', np.array(constrained_pseudo_labels))
+                _ckpt(f"epoch{epoch}_preNP3", np.array(constrained_pseudo_labels))
                 if sampler is not None:
                     # ml_pairs/cl_pairs only exist on the sampler path
-                    _ckpt(f'epoch{epoch}_mlcl', np.array([len(ml_pairs), len(cl_pairs)]))
+                    _ckpt(
+                        f"epoch{epoch}_mlcl", np.array([len(ml_pairs), len(cl_pairs)])
+                    )
                     constrained_pseudo_labels = constrained_clustering(
                         np.array(constrained_pseudo_labels),
                         rerank_dist,
@@ -573,7 +621,7 @@ def main_worker(args):
                         ml_pairs=ml_pairs,
                         cl_pairs=cl_pairs,
                     )
-                    _ckpt(f'epoch{epoch}_postNP3', np.array(constrained_pseudo_labels))
+                    _ckpt(f"epoch{epoch}_postNP3", np.array(constrained_pseudo_labels))
                     for i, label in enumerate(constrained_pseudo_labels):
                         fname, _, cid = pseudo_labeled_dataset[i]
                         pseudo_labeled_dataset[i] = fname, label, cid
@@ -666,12 +714,9 @@ def main_worker(args):
             if (epoch + 1) % args.eval_step == 0 or (epoch == args.epochs - 1):
                 if args.dataset == "wildlife":
                     model.eval()
-                    # O1: num_workers was 0, so every JPEG decode and resize for the
-                    # ~20,900 eval images ran single-threaded in the main process while
-                    # the GPU idled -- 25-40 s per batch of 32 under load. Evaluation,
-                    # not training, dominated wall-clock. The authors' own non-AL script
-                    # used num_workers=8 here, so 0 was an oversight. shuffle=False in
-                    # wildlife_tools, so this changes throughput only, not batch order.
+                    # num_workers must not be 0: eval decodes ~20,900 JPEGs and would
+                    # run single-threaded while the GPU idles. shuffle=False, so this
+                    # changes throughput only, not batch order.
                     megadescriptor_extractor = DeepFeatures(
                         model, device="cuda:0", num_workers=args.workers, batch_size=32
                     )
@@ -684,17 +729,9 @@ def main_worker(args):
                     results = get_evaluation_results(
                         megadescriptor_extractor, dataset, folder, epoch
                     )
-                    # FIXME(wrapper): wildlife_tools' DeepFeatures.__call__ ends with
-                    # `self.model = self.model.to("cpu")` (wildlife_tools/data/cache.py:84),
-                    # and self.model IS this same object -- so the model is left on the CPU
-                    # after every eval and the next epoch dies in DataParallel with
-                    #   "module must have its parameters and buffers on device cuda:0 ...
-                    #    but found one of them on device: cpu".
-                    # The `model.to('cuda:0')` above runs BEFORE the extractor, so it does
-                    # not help. No wildlife_tools version avoids this (0.0.9 lacks the
-                    # .to("cpu") but also lacks TopkClassifier, imported at wildlife.py:20).
-                    # Proper fix: wrap DeepFeatures so it restores the model's device
-                    # itself, instead of patching every call site. See Todo.md.
+                    # Redundant since get_evaluation_results restores the device itself,
+                    # but harmless: wildlife_tools' DeepFeatures.__call__ ends with
+                    # self.model.to("cpu") on this same object.
                     model = model.to("cuda:0")
                     mAP = results["mAP"]
                 else:
@@ -759,6 +796,11 @@ def main_worker(args):
 
     end_time = time.monotonic()
     print("Total running time: ", timedelta(seconds=end_time - start_time))
+    # [record] close out the run record
+    try:
+        record.finish("ok")
+    except NameError:
+        pass  # USL path builds no record
 
 
 if __name__ == "__main__":
@@ -821,6 +863,23 @@ if __name__ == "__main__":
     parser.add_argument("--step-size", type=int, default=20)
     # training configs
     parser.add_argument("--seed", type=int, default=1)
+    # [--split-seed] Selects the data split (representative-gallery draw). Separate from
+    # --seed, which is overwritten by Wildlife.__init__'s set_seed() before it reaches
+    # anything. Default 0 = the split every published run used.
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=0,
+        help="dataset_split_seed for the train/gallery split (default 0)",
+    )
+    # [--partition-seed] Pins the labelled/unlabelled identity partition
+    # (spcl/datasets/wildlife.py:480). Default 102 = every published run.
+    parser.add_argument(
+        "--partition-seed",
+        type=int,
+        default=102,
+        help="seed for the labelled/unlabelled identity partition (default 102)",
+    )
     parser.add_argument("--print-freq", type=int, default=200)
     parser.add_argument("--eval-step", type=int, default=10)
     parser.add_argument(
@@ -862,5 +921,24 @@ if __name__ == "__main__":
         type=int,
         default=5,
         help="number of neighbor medoids for Consistency Sampling",
+    )
+    # [new-arms] flags for the two ablation samplers
+    parser.add_argument(
+        "--consam-finch-partition",
+        type=int,
+        default=1,
+        help="FINCH partition for -s ConSamP1 (0 = the original sampler's behaviour)",
+    )
+    parser.add_argument(
+        "--simband-lo",
+        type=float,
+        default=0.0,
+        help="lower similarity bound for -s SimBand (calibrated, see report)",
+    )
+    parser.add_argument(
+        "--simband-hi",
+        type=float,
+        default=1.0,
+        help="upper similarity bound for -s SimBand",
     )
     main()

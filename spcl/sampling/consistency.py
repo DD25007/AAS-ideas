@@ -8,14 +8,11 @@ from sklearn.cluster import DBSCAN
 from spcl.utils.constrained_clustering import FINCH
 import os
 
-# Todo.md R6: this sampler turns sets of *string*-named graph nodes (f'dbscan-{i}',
-# f'finch-{j}') into ordered lists. Python randomises string hashing per process unless
-# PYTHONHASHSEED is fixed, so that order -- and therefore which coarse cluster S_k the
-# annotation budget runs out on -- varies run to run. The launcher pins PYTHONHASHSEED=0;
-# HITL_SORT_COMPONENTS=1 fixes it in the code instead, so the sampler is reproducible
-# regardless of how it is invoked. Default off: enabling it picks a different (but equally
-# valid) component order than PYTHONHASHSEED=0, so it must not silently move published
-# numbers.
+# This sampler turns sets of *string*-named graph nodes into ordered lists, and Python
+# randomises string hashing per process, so which coarse cluster the annotation budget
+# runs out on varies run to run. The launcher pins PYTHONHASHSEED=0; setting
+# HITL_SORT_COMPONENTS=1 fixes the order in code instead. Off by default: sorting picks
+# a different (equally valid) order and would move published numbers.
 _SORT_COMPONENTS = os.environ.get("HITL_SORT_COMPONENTS", "0") == "1"
 
 
@@ -52,6 +49,11 @@ class ConsistencySampling(BaseSampling):
         self.num_gt_ids_gallery = num_gt_ids_gallery
 
     def select(self, features=None, rerank_dist=None, **kwargs):
+        # [record] reset per-cycle instrumentation
+        self.rec_n_dbscan_raw = self.rec_n_dbscan_aas = None
+        self.rec_n_finch = self.rec_n_regions = None
+        self.rec_cov = None
+        self.rec_shortfall = 0
         sim_thresh = self.args.consam_sim_thresh
         k_medoids = self.args.consam_k
         try:
@@ -75,6 +77,9 @@ class ConsistencySampling(BaseSampling):
             )
             labels_dbscan = clusters_dbscan.copy()
             labels_dbscan[labels_dbscan == -1] = np.arange(labels_dbscan.max() + 1, labels_dbscan.max() + 1 + sum(labels_dbscan == -1))
+            # [record] pure instrumentation: counts only, no behaviour change
+            self.rec_n_dbscan_raw = int(len(set(labels.tolist())) - (1 if -1 in labels else 0))
+            self.rec_n_dbscan_aas = int(len(np.unique(labels_dbscan)))
 
             # Get Nearest Neighbor-based (FINCH) clusters
             rerank_dist_cp = rerank_dist.copy()
@@ -90,20 +95,9 @@ class ConsistencySampling(BaseSampling):
                 cl_pairs=self.cl_pairs,
             )
             clusters_finch = labels_finch
+            # [record]
+            self.rec_n_finch = int(len(np.unique(labels_finch)))
 
-            # cluster = DBSCAN(eps=self.thresh + 0.02, min_samples=4, metric='precomputed', n_jobs=-1)
-            # labels = cluster.fit_predict(rerank_dist)
-            # clusters_finch = constrained_clustering(
-            #     labels=labels,
-            #     rerank_dist=rerank_dist,
-            #     method="DBSCAN",
-            #     min_samples=self.min_samples,
-            #     metric=self.metric,
-            #     ml_pairs=self.ml_pairs,
-            #     cl_pairs=self.cl_pairs,
-            # )
-            # labels_finch = clusters_finch.copy()
-            # labels_finch[labels_finch == -1] = np.arange(labels_finch.max() + 1, labels_finch.max() + 1 + sum(labels_finch == -1))
 
             pairwise_distances = rerank_dist
 
@@ -147,6 +141,7 @@ class ConsistencySampling(BaseSampling):
                 inconsistent_dbscan_labels.append(list(int(dn.split('-')[1]) for dn in dbscan_nodes))
                 inconsistent_finch_labels.append(list(int(fn.split('-')[1]) for fn in finch_nodes))
 
+            self.rec_n_regions = len(S)  # [record]
             sampling_pool = defaultdict(list)
             for k, S_k in enumerate(S):
                 sampling_pool["S_k"].append(set())
@@ -310,6 +305,8 @@ class ConsistencySampling(BaseSampling):
                 medoid_local_idx = np.argmin(np.sum(sub_matrix_for_medoid, axis=1))
                 medoids[k_idx] = row_indices[medoid_local_idx]
 
+            # [record] images covered by regions of uncertainty
+            self.rec_cov = len(set().union(*sampling_pool["S_k"])) if sampling_pool["S_k"] else 0
             for i in range(n):
                 distances_to_other_medoids = []
                 medoid_i_global = medoids[i]
@@ -347,14 +344,6 @@ class ConsistencySampling(BaseSampling):
             self.beta2 = beta2
             # self.beta3 = 0  # beta3
 
-            # mod_s = nx.number_connected_components(inconsistency_graph)
-            # eps_hat = (mod_s - self.num_gt_ids_gallery) / max(mod_s, self.num_gt_ids_gallery)
-            #
-            # glc_k = 12
-            # glc_d = 0.75
-            # glc_v = -2.5
-            # eps = (1 + np.exp(-glc_k * (eps_hat - glc_d))) ** (1 / glc_v)
-            # eps = 0.6
 
             for i in range(len(sampling_pool["pairs"])):
                 # assign priors
@@ -443,6 +432,7 @@ class ConsistencySampling(BaseSampling):
             if len(selected_pairs) < self.n:
                 n = self.n - len(selected_pairs)
                 print(f"Budget not completely utilized! {n}")
+                self.rec_shortfall = int(n)  # [record]
 
             return self.ml_pairs, self.cl_pairs
         except KeyboardInterrupt:

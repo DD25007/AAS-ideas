@@ -49,6 +49,10 @@ from spcl.sampling.counting_clusters import CountingClusters
 
 from utils import get_evaluation_results
 
+# --deterministic, --stage-log, --stop-after-epoch, --train-seed, --loss-trace.
+# Every entry point is a no-op when its flag is off (see infra/determinism.py).
+from infra import determinism as _det
+
 from wildlife_tools.features import DeepFeatures
 
 
@@ -111,6 +115,7 @@ def get_train_loader(
             shuffle=not rmgs_flag,
             pin_memory=True,
             drop_last=True,
+            **_det.loader_kwargs(),  # {} unless --deterministic
         ),
         length=iters,
     )
@@ -202,6 +207,8 @@ def main():
                 f"{args.eval_step}, got {len(_caps)}")
     if not 0 <= args.al_offset < args.epochs:
         parser.error("--al-offset must satisfy 0 <= offset < --epochs")
+    if args.stop_after_epoch is not None and not 0 <= args.stop_after_epoch < args.epochs:
+        parser.error("--stop-after-epoch must satisfy 0 <= N < --epochs")
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -230,6 +237,8 @@ def main_worker(args):
 
     sys.stdout = Logger(osp.join(args.logs_dir, "log.txt"))
     print("==========\nArgs:{}\n==========".format(args))
+    _det.enable(args)  # no-op unless --deterministic / --stage-log
+    _det.stage("start")
     # [canon-pairs] process-wide switch, so the samplers' internal calls see it too
     _cc_module.CANONICAL_PAIRS = bool(args.canonical_pairs)
     if args.canonical_pairs:
@@ -245,6 +254,7 @@ def main_worker(args):
     test_loader = get_test_loader(
         dataset, args.height, args.width, args.batch_size, args.workers
     )
+    _det.stage("dataset_loaded")
 
     print(dataset.train[:20])
 
@@ -332,6 +342,7 @@ def main_worker(args):
         )
         memory.features = F.normalize(features, dim=1).cuda()
         _ckpt("memory_features", memory.features)
+        _det.stage("epoch0_features")
         if gt_labels is None and sampler is not None:
             gt_labels = [pid for _, pid, _ in sorted(dataset.train)]
             sampler.set_gt_labels(gt_labels)
@@ -365,6 +376,7 @@ def main_worker(args):
 
         # Trainer
         trainer = SpCLTrainer_USL(model, memory)
+        _det.trace_losses(args, memory)  # no-op unless --loss-trace
 
         # [al-schedule] With --al-offset > 0 the epochs before the first cycle impose no
         # constraints (constrained_clustering returns labels unchanged for empty lists).
@@ -383,6 +395,7 @@ def main_worker(args):
                 features = memory.features.clone()
                 rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
                 _ckpt(f"epoch{epoch}_rerank", rerank_dist)
+                _det.stage(f"epoch{epoch}_rerank")
 
                 # [al-schedule] offset 0 reduces to the original `epoch % eval_step == 0`
                 if (
@@ -417,6 +430,7 @@ def main_worker(args):
                             {k: v for k, v in _r.items() if k != "dataset_endpoints"}
                         ),
                     )
+                    _det.stage(f"epoch{epoch}_al_select")
 
                 if epoch == 0:
                     # DBSCAN cluster
@@ -443,6 +457,7 @@ def main_worker(args):
                 _ckpt(f"epoch{epoch}_labels", pseudo_labels)
                 pseudo_labels_tight = cluster_tight.fit_predict(rerank_dist)
                 pseudo_labels_loose = cluster_loose.fit_predict(rerank_dist)
+                _det.stage(f"epoch{epoch}_dbscan")
                 num_ids = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
                 num_ids_tight = len(set(pseudo_labels_tight)) - (
                     1 if -1 in pseudo_labels_tight else 0
@@ -690,6 +705,7 @@ def main_worker(args):
                 )
 
                 memory.labels = pseudo_labels.cuda()
+                _det.stage(f"epoch{epoch}_labels")
 
                 if sampler is not None:
                     purity_labels = pseudo_labels.cpu().numpy().copy()
@@ -737,6 +753,8 @@ def main_worker(args):
                 ):
                     pseudo_labeled_dataset.append((fname, label.item(), cid))
 
+            # no-op unless --train-seed; fires once, before the first train loader
+            _det.train_seed_before_first_step(args)
             train_loader = get_train_loader(
                 args,
                 dataset,
@@ -758,6 +776,8 @@ def main_worker(args):
                 print_freq=args.print_freq,
                 train_iters=len(train_loader),
             )
+            # stage line, loss trace, --stop-after-epoch; no-op by default
+            _det.after_train(args, epoch, model, memory)
 
             if (epoch + 1) % args.eval_step == 0 or (epoch == args.epochs - 1):
                 if args.dataset == "wildlife":
@@ -817,6 +837,7 @@ def main_worker(args):
                         epoch, mAP, best_mAP, " *" if is_best else ""
                     )
                 )
+                _det.stage(f"epoch{epoch}_eval")
 
             lr_scheduler.step()
 
@@ -1001,6 +1022,40 @@ if __name__ == "__main__":
         default=0,
         help="epoch of the first AL cycle; later cycles follow every --eval-step "
         "epochs (default 0)",
+    )
+    # Determinism and instrumentation; all default OFF (infra/determinism.py)
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        default=False,
+        help="cudnn.deterministic, no benchmark, use_deterministic_algorithms(warn_only), "
+        "seeded train-loader generator + worker_init_fn; needs CUBLAS_WORKSPACE_CONFIG",
+    )
+    parser.add_argument(
+        "--stage-log",
+        action="store_true",
+        default=False,
+        help="print wall clock and CUDA max memory at each pipeline stage",
+    )
+    parser.add_argument(
+        "--train-seed",
+        type=int,
+        default=None,
+        help="re-seed all RNGs (and the --deterministic loader generator) right before the "
+        "first training step; split and epoch-0 path unchanged (default: off)",
+    )
+    parser.add_argument(
+        "--loss-trace",
+        action="store_true",
+        default=False,
+        help="save every iteration's loss at full precision to <logs-dir>/loss_trace_epoch<e>.npy",
+    )
+    parser.add_argument(
+        "--stop-after-epoch",
+        type=int,
+        default=None,
+        help="after this epoch's training step, save model + memory bank to "
+        "<logs-dir>/stop_epoch<N>.pth and exit (default: run all epochs)",
     )
     # [new-arms] flags for the two ablation samplers
     parser.add_argument(

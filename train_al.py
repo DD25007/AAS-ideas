@@ -247,6 +247,10 @@ def main_worker(args):
     _cc_module.CANONICAL_PAIRS = bool(args.canonical_pairs)
     if args.canonical_pairs:
         print("[canon-pairs] constrained_clustering canonicalises ML/CL pair sets")
+    # [np3-per-cluster-skip] process-wide switch (default off = the original `break`), so the samplers' internal calls see it too
+    _cc_module.NP3_PER_CLUSTER_SKIP = bool(args.np3_per_cluster_skip)
+    if args.np3_per_cluster_skip:
+        print("[np3-per-cluster-skip] constrained_clustering: a contradictory cluster is skipped, not the rest of the loop")
 
     # Create datasets
     iters = args.iters if (args.iters > 0) else None
@@ -1025,6 +1029,15 @@ if __name__ == "__main__":
         default=False,
         help="canonicalise ML/CL pairs to sorted tuples inside constrained_clustering, "
         "so pairs stored (hi, lo) are no longer dropped by the cannot-link repair",
+    )
+    # [np3-per-cluster-skip] default False = the original behaviour (byte-identical labels)
+    parser.add_argument(
+        "--np3-per-cluster-skip",
+        action="store_true",
+        default=False,
+        help="constrained_clustering: when a cluster's cannot-link pairs all lie inside one must-link component "
+        "(contradictory constraints), leave only that cluster as-is and continue with the next one, instead of "
+        "the original `break` that skips every remaining cluster",
     )
     # [al-schedule] AL schedule knobs. All defaults reproduce the published schedule exactly.
     parser.add_argument(

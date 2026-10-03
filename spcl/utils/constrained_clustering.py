@@ -14,6 +14,12 @@ import networkx as nx
 # --canonical-pairs.
 CANONICAL_PAIRS = False
 
+# [np3-per-cluster-skip] Off by default: the original behaviour. On: the `break` in the cannot-link repair loop (a cluster whose
+# cannot-link pairs all lie inside ONE must-link component, i.e. contradictory constraints) becomes a per-cluster `continue`, so only
+# that cluster is left as-is instead of every later cluster being skipped. Process-wide, like CANONICAL_PAIRS, so the samplers' own
+# calls see it too. Set by train_al.py --np3-per-cluster-skip. Contradictory clusters are listed in the [cc-diag] output.
+NP3_PER_CLUSTER_SKIP = False
+
 
 def FINCH(
     data,
@@ -227,6 +233,10 @@ def constrained_clustering(
                     labels[pts] = sub_id
                     cluster_id += 1
             else:
+                if NP3_PER_CLUSTER_SKIP:
+                    # [np3-per-cluster-skip] leave THIS cluster as-is and go on with the next one; break_fired stays False
+                    _diag.setdefault("contradictory_clusters", []).append(int(c_id))
+                    continue
                 # No CL violations! Labels are already correct...
                 _diag["break_fired"] = True
                 _diag["break_at_index"] = int(_c_idx)
@@ -261,6 +271,8 @@ def constrained_clustering(
                         labels[pt] = sub_id
                         cluster_id_to_points[sub_id].append(pt)
 
+    if NP3_PER_CLUSTER_SKIP:
+        _diag.setdefault("contradictory_clusters", [])
     # [cc-diag] summarise what the early break skipped.
     _remaining = (
         [c for c in unique_clusters[_diag["break_at_index"] + 1 :] if c != -1]

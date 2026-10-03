@@ -6,3 +6,12 @@
 *.py text eol=lf
 *.sh text eol=lf
 *.md text eol=lf
+
+# Results and arrays are stored byte-exact: no line-ending conversion, no diffing.
+# (The rules above are for code; `* text=auto eol=lf` rewrote CRLF to LF in results.csv
+# files and in a CSV whose sha256 a provenance file had recorded.)
+*.csv -text
+*.npy binary
+*.npz binary
+*.pt binary
+*.pth binary

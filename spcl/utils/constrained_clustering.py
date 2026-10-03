@@ -104,6 +104,13 @@ def constrained_clustering(
     sanity_check=False,
 ):
     if len(ml_pairs) == 0 and len(cl_pairs) == 0:
+        # NOTE: the CL-repair loop (and its early `break`) is unreachable on this path.
+        print(
+            "[cc-diag]",
+            __import__("json").dumps(
+                {"method": method, "skipped_no_constraints": True}
+            ),
+        )
         return labels
 
     if method == "DBSCAN":
@@ -136,14 +143,32 @@ def constrained_clustering(
         cl_pairs_set = set(cl_pairs)
         ml_pairs_set = set(ml_pairs)
 
-    for c_id in unique_clusters:
+    # [cc-diag] instrumentation for the early `break` below. Counts how much of the
+    # cannot-link repair loop is skipped when the break fires.
+    _diag = {
+        "total_clusters": int(len(unique_clusters)),
+        "total_clusters_excl_noise": int((unique_clusters != -1).sum()),
+        "examined": 0,
+        "examined_with_cl_violation": 0,
+        "break_fired": False,
+        "break_at_index": None,
+        "break_at_cluster": None,
+        "largest_comp_sizes": [],
+        "n_conflict_comps": [],
+    }
+    _cl_examined_seen = 0
+
+    for _c_idx, c_id in enumerate(unique_clusters):
         # Ensure cannot-link constraints are not violated in any cluster
         if c_id == -1:
             continue
+        _diag["examined"] += 1
         clust_points = np.where(labels == c_id)[0]
         clust_point_pairs = list(itertools.combinations(clust_points, 2))
         clust_cl_pairs = set(clust_point_pairs).intersection(cl_pairs_set)
         if len(clust_cl_pairs) > 0:
+            _diag["examined_with_cl_violation"] += 1
+            _cl_examined_seen += len(clust_cl_pairs)
             # cannot-link constraint violated
             clust_ml_pairs = set(clust_point_pairs).intersection(ml_pairs_set)
             # Step 1: ML graph (G_ML)
@@ -187,6 +212,9 @@ def constrained_clustering(
 
             # Process largest component first
             largest_component = conflict_graph_comps_sorted[0]
+            # [cc-diag] margin to the break: it fires iff this is exactly 1
+            _diag["largest_comp_sizes"].append(int(len(largest_component)))
+            _diag["n_conflict_comps"].append(int(len(conflict_graph_comps_sorted)))
             if len(largest_component) > 1:
                 # Subgraph for largest_component
                 subG = conflict_graph.subgraph(largest_component).copy()
@@ -200,6 +228,9 @@ def constrained_clustering(
                     cluster_id += 1
             else:
                 # No CL violations! Labels are already correct...
+                _diag["break_fired"] = True
+                _diag["break_at_index"] = int(_c_idx)
+                _diag["break_at_cluster"] = int(c_id)
                 break
 
             # Process remaining components via assignment
@@ -229,6 +260,49 @@ def constrained_clustering(
                     for pt in ml_components[comp_idx]:
                         labels[pt] = sub_id
                         cluster_id_to_points[sub_id].append(pt)
+
+    # [cc-diag] summarise what the early break skipped.
+    _remaining = (
+        [c for c in unique_clusters[_diag["break_at_index"] + 1 :] if c != -1]
+        if _diag["break_fired"]
+        else []
+    )
+    _diag["clusters_skipped"] = len(_remaining)
+    _skipped_pt2c = {}
+    if _remaining:
+        _rem_set = set(int(c) for c in _remaining)
+        for _pt, _lb in enumerate(labels):
+            _lb = int(_lb)
+            if _lb in _rem_set:
+                _skipped_pt2c[_pt] = _lb
+    _involving = 0          # >=1 endpoint inside a skipped cluster
+    _both_same = 0          # both endpoints in the SAME skipped cluster == missed violation
+    _clusters_hit = set()
+    if _skipped_pt2c:
+        for _a, _b in cl_pairs_set:
+            _ca = _skipped_pt2c.get(_a)
+            _cb = _skipped_pt2c.get(_b)
+            if _ca is None and _cb is None:
+                continue
+            _involving += 1
+            if _ca is not None and _ca == _cb:
+                _both_same += 1
+                _clusters_hit.add(_ca)
+    _diag["cl_pairs_involving_skipped_clusters"] = _involving
+    _diag["cl_pairs_violated_in_skipped_clusters"] = _both_same
+    _diag["skipped_clusters_with_cl_violation"] = len(_clusters_hit)
+    _diag["cl_pairs_total"] = len(cl_pairs_set)
+    _diag["cl_pairs_repaired_before_break"] = _cl_examined_seen
+    _lcs = _diag.pop("largest_comp_sizes")
+    _diag["n_cl_violating_clusters"] = len(_lcs)
+    _diag["largest_comp_size_min"] = min(_lcs) if _lcs else None
+    _diag["largest_comp_size_eq1"] = sum(1 for v in _lcs if v == 1)
+    _diag["largest_comp_size_hist"] = {
+        str(v): _lcs.count(v) for v in sorted(set(_lcs))
+    }
+    _diag["n_conflict_comps"] = _diag["n_conflict_comps"][:0] or None
+    _diag["method"] = method
+    print("[cc-diag]", __import__("json").dumps(_diag))
 
     if method == "DBSCAN":
         unique, counts = np.unique(labels, return_counts=True)

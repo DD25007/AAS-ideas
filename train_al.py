@@ -52,6 +52,7 @@ from utils import get_evaluation_results
 # --deterministic, --stage-log, --stop-after-epoch, --train-seed, --loss-trace, --save-state,
 # --resume. Every entry point is a no-op when its flag is off (see infra/).
 from infra import determinism as _det
+from infra import fast_rerank as _fast
 from infra import resume as _resume
 from infra import state_saver as _save
 
@@ -387,6 +388,9 @@ def main_worker(args):
         # With the default offset of 0 these are overwritten at epoch 0 before any use.
         ml_pairs, cl_pairs = [], []
 
+        # The original function unless --fast-rerank (default OFF)
+        rerank_fn = _fast.pick(args, compute_jaccard_distance)
+
         # Resume. Without --resume this returns (0, 0, None, [], []), so the loop below
         # starts at epoch 0 and nothing else changes.
         start_epoch, best_mAP, indep_thres, ml_pairs, cl_pairs = _resume.maybe_load(
@@ -404,7 +408,7 @@ def main_worker(args):
                     "==> Create pseudo labels for unlabeled data with self-paced policy"
                 )
                 features = memory.features.clone()
-                rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
+                rerank_dist = rerank_fn(features, k1=args.k1, k2=args.k2)
                 _ckpt(f"epoch{epoch}_rerank", rerank_dist)
                 _det.stage(f"epoch{epoch}_rerank")
                 _save.rerank(epoch, rerank_dist)
@@ -1059,6 +1063,13 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="print wall clock and CUDA max memory at each pipeline stage",
+    )
+    parser.add_argument(
+        "--fast-rerank",
+        action="store_true",
+        default=False,
+        help="use infra/fast_rerank (bit-identical, hoists the per-row index copy and "
+        "blocks V_qe); default OFF = spcl/utils/faiss_rerank.compute_jaccard_distance",
     )
     parser.add_argument(
         "--train-seed",

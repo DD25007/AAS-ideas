@@ -34,7 +34,7 @@ KEY_ARGS = ("dataset", "subset", "sampler", "seed", "split_seed", "partition_see
             "iters", "eval_step", "batch_size", "num_instances", "height", "width", "lr",
             "step_size", "eps", "eps_gap", "k1", "k2", "canonical_pairs", "deterministic",
             "train_seed", "al_cycle_cap", "al_cycle_caps", "al_offset", "consam_eps",
-            "consam_sim_thresh")
+            "consam_sim_thresh", "fast_rerank")
 
 
 def save_epochs(args):

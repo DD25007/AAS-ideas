@@ -22,7 +22,9 @@ The old checkout `/storage/dd25007/HITL-ReID` is not part of this work; do not e
 ## How to run
 - Env: `/storage/dd25007/conda_envs/hitl/bin/python`; export `PYTHONHASHSEED=0` and `CUBLAS_WORKSPACE_CONFIG=:4096:8` (`--deterministic` refuses to start without the latter).
 - Data: `dataroot/wildlife` -> `/storage/dd25007/dataset` (symlink, gitignored). Outputs: `outputs/` -> `/scratch/dd25007/AAS-ideas-out/` (gitignored); put `--logs-dir` under it.
-- Plain AAS: `train_al.py -d wildlife --subset combined -s ConSam --seed 1 --split-seed 0 --canonical-pairs --data-dir $PWD/dataroot -j 6 --deterministic --train-seed S --fast-rerank --logs-dir outputs/<run>`.
+- **Launch through `scripts/train_forkserver.py`** (same arguments as `train_al.py`; it runs it verbatim with forkserver DataLoader workers). With plain `fork` the
+  workers intermittently deadlock on this node (worker single-threaded in futex_wait, 0 CPU, log silent right after "Initialize instance features"): seen on the first gate attempt.
+- Plain AAS: `scripts/train_forkserver.py -d wildlife --subset combined -s ConSam --seed 1 --split-seed 0 --canonical-pairs --data-dir $PWD/dataroot -j 6 --deterministic --train-seed S --fast-rerank --logs-dir outputs/<run>`.
 - Gate (epoch 0 must reproduce C0 seed 0's first `[record]`, all 19 fields): `scripts/gate_epoch0.sh <gpu>` then `scripts/compare_epoch0_record.py <C0 log> <new log>`.
 - Smoke test after any code change: `python train_al.py --help` (CPU), `python scripts/test_gpu_locks.py`.
 - Infra lives in `infra/` (determinism, resume, state_saver, fast_rerank); every flag is a no-op unless given.

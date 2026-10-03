@@ -4,6 +4,7 @@
 #   scripts/gate_epoch0.sh <gpu> [logs-dir]       default logs-dir: outputs/gate_epoch0
 # Takes the GPU slot lock for the card (exit 3 if it is held). Does not choose the card for you: check
 # `python3 scripts/gpu_locks.py busy` and nvidia-smi first.
+# Runs train_al.py through scripts/train_forkserver.py: with plain fork the DataLoader workers can deadlock on this node.
 set -uo pipefail
 GPU=${1:?usage: gate_epoch0.sh <gpu> [logs-dir]}
 cd "$(dirname "$0")/.."
@@ -14,7 +15,7 @@ export CUDA_VISIBLE_DEVICES=$GPU
 export PYTHONHASHSEED=0
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 PY=/storage/dd25007/conda_envs/hitl/bin/python
-$PY -u train_al.py -d wildlife --subset combined -s ConSam --seed 1 --split-seed 0 --canonical-pairs \
+$PY -u scripts/train_forkserver.py -d wildlife --subset combined -s ConSam --seed 1 --split-seed 0 --canonical-pairs \
     --data-dir "$PWD/dataroot" -j 6 --deterministic --train-seed 0 --fast-rerank \
     --stop-after-epoch 0 --logs-dir "$LOGS" 2>&1 \
   | gawk '{ print strftime("%Y-%m-%dT%H:%M:%S"), $0; fflush(); }' > "$LOGS/attempt_0.log"

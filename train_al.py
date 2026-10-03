@@ -182,6 +182,26 @@ def create_model(args):
 
 def main():
     args = parser.parse_args()
+    # [al-schedule] reject schedules that would silently run fewer or no AL cycles
+    if args.al_cycle_cap is not None and args.al_cycle_cap <= 0:
+        parser.error("--al-cycle-cap must be a positive integer")
+    if args.al_cycle_caps is not None:  # flag-isolated: only runs when the flag is given
+        if args.al_cycle_cap is not None:
+            parser.error("--al-cycle-caps and --al-cycle-cap are mutually exclusive")
+        try:
+            _caps = [int(x) for x in str(args.al_cycle_caps).split(",")]
+        except ValueError:
+            parser.error("--al-cycle-caps must be a comma list of integers")
+        if any(c <= 0 for c in _caps):
+            parser.error("--al-cycle-caps entries must be positive integers")
+        _n_cycles = max(0, -(-(args.epochs - args.al_offset) // args.eval_step))
+        if len(_caps) != _n_cycles:
+            parser.error(
+                f"--al-cycle-caps needs exactly one cap per AL cycle: {_n_cycles} for "
+                f"--epochs {args.epochs} --al-offset {args.al_offset} --eval-step "
+                f"{args.eval_step}, got {len(_caps)}")
+    if not 0 <= args.al_offset < args.epochs:
+        parser.error("--al-offset must satisfy 0 <= offset < --epochs")
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -315,6 +335,11 @@ def main_worker(args):
         if gt_labels is None and sampler is not None:
             gt_labels = [pid for _, pid, _ in sorted(dataset.train)]
             sampler.set_gt_labels(gt_labels)
+            # [al-schedule] set_gt_labels sizes the per-cycle budget; cap it here so the
+            # sampler draws at most this many pairs and reports shortfall against it
+            if args.al_cycle_cap is not None:
+                sampler.n = min(sampler.n, args.al_cycle_cap)
+                print(f"[al-cycle-cap] per-cycle budget = {sampler.n}")
         # [record] start the run record once the pool is fixed
         record = RunRecord(
             args.logs_dir,
@@ -341,6 +366,11 @@ def main_worker(args):
         # Trainer
         trainer = SpCLTrainer_USL(model, memory)
 
+        # [al-schedule] With --al-offset > 0 the epochs before the first cycle impose no
+        # constraints (constrained_clustering returns labels unchanged for empty lists).
+        # With the default offset of 0 these are overwritten at epoch 0 before any use.
+        ml_pairs, cl_pairs = [], []
+
         for epoch in range(args.epochs):
             if args.dataset == "wildlife":
                 model.train()
@@ -354,7 +384,20 @@ def main_worker(args):
                 rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
                 _ckpt(f"epoch{epoch}_rerank", rerank_dist)
 
-                if epoch % (args.eval_step) == 0 and sampler is not None:
+                # [al-schedule] offset 0 reduces to the original `epoch % eval_step == 0`
+                if (
+                    sampler is not None
+                    and epoch >= args.al_offset
+                    and (epoch - args.al_offset) % args.eval_step == 0
+                ):
+                    if args.al_cycle_caps is not None:  # per-cycle budget cap
+                        if not hasattr(sampler, "_base_n"):
+                            sampler._base_n = sampler.n  # the sampler's own budget, before any cap
+                        _cap_k = (epoch - args.al_offset) // args.eval_step
+                        sampler.n = min(sampler._base_n,
+                                        [int(x) for x in args.al_cycle_caps.split(",")][_cap_k])
+                        print(f"[al-cycle-caps] cycle {_cap_k + 1} (epoch {epoch}): "
+                              f"per-cycle budget = {sampler.n}", flush=True)
                     if args.sampler == "None":
                         ml_pairs, cl_pairs = [], []
                     else:
@@ -934,6 +977,30 @@ if __name__ == "__main__":
         default=False,
         help="canonicalise ML/CL pairs to sorted tuples inside constrained_clustering, "
         "so pairs stored (hi, lo) are no longer dropped by the cannot-link repair",
+    )
+    # [al-schedule] AL schedule knobs. All defaults reproduce the published schedule exactly.
+    parser.add_argument(
+        "--al-cycle-cap",
+        type=int,
+        default=None,
+        help="max pairs queried per AL cycle: the sampler plans with "
+        "min(budget, cap). Default: unlimited",
+    )
+    parser.add_argument(
+        "--al-cycle-caps",
+        type=str,
+        default=None,
+        help="per-cycle version of --al-cycle-cap: a comma list with exactly one cap "
+        "per AL cycle (e.g. 10270,5794,2968,2042,1636 for --epochs 50 --eval-step 10). "
+        "Cycle k plans with min(budget, caps[k]). Mutually exclusive with --al-cycle-cap. "
+        "Default OFF: nothing changes.",
+    )
+    parser.add_argument(
+        "--al-offset",
+        type=int,
+        default=0,
+        help="epoch of the first AL cycle; later cycles follow every --eval-step "
+        "epochs (default 0)",
     )
     # [new-arms] flags for the two ablation samplers
     parser.add_argument(

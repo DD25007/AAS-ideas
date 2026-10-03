@@ -24,6 +24,7 @@ from spcl.models.hm import HybridMemory
 from spcl.trainers import SpCLTrainer_USL
 from spcl.evaluators import Evaluator, extract_features
 from spcl.utils.constrained_clustering import constrained_clustering
+import spcl.utils.constrained_clustering as _cc_module  # [canon-pairs]
 from spcl.utils.data import IterLoader
 from spcl.utils.data import transforms as T
 from spcl.utils.data.sampler import RandomMultipleGallerySampler
@@ -209,6 +210,10 @@ def main_worker(args):
 
     sys.stdout = Logger(osp.join(args.logs_dir, "log.txt"))
     print("==========\nArgs:{}\n==========".format(args))
+    # [canon-pairs] process-wide switch, so the samplers' internal calls see it too
+    _cc_module.CANONICAL_PAIRS = bool(args.canonical_pairs)
+    if args.canonical_pairs:
+        print("[canon-pairs] constrained_clustering canonicalises ML/CL pair sets")
 
     # Create datasets
     iters = args.iters if (args.iters > 0) else None
@@ -921,6 +926,14 @@ if __name__ == "__main__":
         type=int,
         default=5,
         help="number of neighbor medoids for Consistency Sampling",
+    )
+    # [canon-pairs] default False reproduces the published (bug-present) behaviour
+    parser.add_argument(
+        "--canonical-pairs",
+        action="store_true",
+        default=False,
+        help="canonicalise ML/CL pairs to sorted tuples inside constrained_clustering, "
+        "so pairs stored (hi, lo) are no longer dropped by the cannot-link repair",
     )
     # [new-arms] flags for the two ablation samplers
     parser.add_argument(

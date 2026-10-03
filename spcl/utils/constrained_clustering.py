@@ -4,6 +4,16 @@ import numpy as np
 import itertools
 import networkx as nx
 
+# [canon-pairs] Pair-ordering fix, off by default so the published runs are reproduced.
+# The cannot-link repair below intersects itertools.combinations(...) -- always (lo, hi) --
+# against the constraint sets. Pairs stored (hi, lo), which BaseSampling.annotate's
+# tuple(frozenset) produces for roughly half of all pairs, never match and are silently
+# dropped. When True, both sets are canonicalised to sorted tuples on entry; nothing else
+# changes. Process-wide on purpose: the samplers' own calls (LBAS/GBAS/ConSam select())
+# pass earlier cycles' constraints through this same function. Set by train_al.py
+# --canonical-pairs.
+CANONICAL_PAIRS = False
+
 
 def FINCH(
     data,
@@ -118,8 +128,13 @@ def constrained_clustering(
             labels[labels == cluster_b] = cluster_a
 
     unique_clusters = np.unique(labels)
-    cl_pairs_set = set(cl_pairs)
-    ml_pairs_set = set(ml_pairs)
+    # [canon-pairs] see CANONICAL_PAIRS at the top of this module
+    if CANONICAL_PAIRS:
+        cl_pairs_set = {tuple(sorted(p)) for p in cl_pairs}
+        ml_pairs_set = {tuple(sorted(p)) for p in ml_pairs}
+    else:
+        cl_pairs_set = set(cl_pairs)
+        ml_pairs_set = set(ml_pairs)
 
     for c_id in unique_clusters:
         # Ensure cannot-link constraints are not violated in any cluster

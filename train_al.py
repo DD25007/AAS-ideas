@@ -49,9 +49,11 @@ from spcl.sampling.counting_clusters import CountingClusters
 
 from utils import get_evaluation_results
 
-# --deterministic, --stage-log, --stop-after-epoch, --train-seed, --loss-trace.
-# Every entry point is a no-op when its flag is off (see infra/determinism.py).
+# --deterministic, --stage-log, --stop-after-epoch, --train-seed, --loss-trace, --save-state,
+# --resume. Every entry point is a no-op when its flag is off (see infra/).
 from infra import determinism as _det
+from infra import resume as _resume
+from infra import state_saver as _save
 
 from wildlife_tools.features import DeepFeatures
 
@@ -238,6 +240,7 @@ def main_worker(args):
     sys.stdout = Logger(osp.join(args.logs_dir, "log.txt"))
     print("==========\nArgs:{}\n==========".format(args))
     _det.enable(args)  # no-op unless --deterministic / --stage-log
+    _save.enable(args)  # no-op unless --save-state
     _det.stage("start")
     # [canon-pairs] process-wide switch, so the samplers' internal calls see it too
     _cc_module.CANONICAL_PAIRS = bool(args.canonical_pairs)
@@ -343,6 +346,7 @@ def main_worker(args):
         memory.features = F.normalize(features, dim=1).cuda()
         _ckpt("memory_features", memory.features)
         _det.stage("epoch0_features")
+        _save.features(memory.features)
         if gt_labels is None and sampler is not None:
             gt_labels = [pid for _, pid, _ in sorted(dataset.train)]
             sampler.set_gt_labels(gt_labels)
@@ -383,7 +387,14 @@ def main_worker(args):
         # With the default offset of 0 these are overwritten at epoch 0 before any use.
         ml_pairs, cl_pairs = [], []
 
-        for epoch in range(args.epochs):
+        # Resume. Without --resume this returns (0, 0, None, [], []), so the loop below
+        # starts at epoch 0 and nothing else changes.
+        start_epoch, best_mAP, indep_thres, ml_pairs, cl_pairs = _resume.maybe_load(
+            args, model, memory, optimizer, lr_scheduler, sampler
+        )
+
+        for epoch in range(start_epoch, args.epochs):
+            _save.set_epoch(epoch)
             if args.dataset == "wildlife":
                 model.train()
 
@@ -396,6 +407,7 @@ def main_worker(args):
                 rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
                 _ckpt(f"epoch{epoch}_rerank", rerank_dist)
                 _det.stage(f"epoch{epoch}_rerank")
+                _save.rerank(epoch, rerank_dist)
 
                 # [al-schedule] offset 0 reduces to the original `epoch % eval_step == 0`
                 if (
@@ -431,8 +443,11 @@ def main_worker(args):
                         ),
                     )
                     _det.stage(f"epoch{epoch}_al_select")
+                    _save.cycle(epoch, sampler, ml_pairs, cl_pairs)
 
-                if epoch == 0:
+                # `or epoch == start_epoch` fires only on a resumed run, where the
+                # cluster objects of epoch 0 are gone; start_epoch is 0 otherwise.
+                if epoch == 0 or epoch == start_epoch:
                     # DBSCAN cluster
                     eps = args.eps
                     eps_tight = eps - args.eps_gap
@@ -455,6 +470,7 @@ def main_worker(args):
                 # select & cluster images as training set of this epochs
                 pseudo_labels = cluster.fit_predict(rerank_dist)
                 _ckpt(f"epoch{epoch}_labels", pseudo_labels)
+                _save.dbscan_raw(epoch, pseudo_labels)
                 pseudo_labels_tight = cluster_tight.fit_predict(rerank_dist)
                 pseudo_labels_loose = cluster_loose.fit_predict(rerank_dist)
                 _det.stage(f"epoch{epoch}_dbscan")
@@ -671,6 +687,7 @@ def main_worker(args):
 
                 # Impose ML and CL constraints on the final pseudo labels
                 _ckpt(f"epoch{epoch}_preNP3", np.array(constrained_pseudo_labels))
+                _save.labels_pre(epoch, np.array(constrained_pseudo_labels))
                 if sampler is not None:
                     # ml_pairs/cl_pairs only exist on the sampler path
                     _ckpt(
@@ -706,6 +723,7 @@ def main_worker(args):
 
                 memory.labels = pseudo_labels.cuda()
                 _det.stage(f"epoch{epoch}_labels")
+                _save.labels_post(epoch, pseudo_labels)
 
                 if sampler is not None:
                     purity_labels = pseudo_labels.cpu().numpy().copy()
@@ -840,6 +858,11 @@ def main_worker(args):
                 _det.stage(f"epoch{epoch}_eval")
 
             lr_scheduler.step()
+
+            # Both no-ops unless --resume-save-epochs / --exit-after-epoch
+            _resume.save(args, epoch, model, memory, optimizer, lr_scheduler, sampler,
+                         best_mAP, indep_thres, ml_pairs, cl_pairs)
+            _resume.exit_after(args, epoch)
 
         print("==> Test with the best model:")
         checkpoint = load_checkpoint(osp.join(args.logs_dir, "model_best.pth.tar"))
@@ -1056,6 +1079,38 @@ if __name__ == "__main__":
         default=None,
         help="after this epoch's training step, save model + memory bank to "
         "<logs-dir>/stop_epoch<N>.pth and exit (default: run all epochs)",
+    )
+    parser.add_argument(
+        "--save-state",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="save pseudo-labels, AL pairs/answers and the sampler's own views to DIR",
+    )
+    parser.add_argument(
+        "--save-rerank-epochs",
+        type=str,
+        default="0",
+        help="which epochs' rerank matrices --save-state writes (comma-separated; ~1.6 GB each)",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="resume from a file written by --resume-save-epochs",
+    )
+    parser.add_argument(
+        "--resume-save-epochs",
+        type=str,
+        default=None,
+        help="write <logs-dir>/resume_epoch<e>.pth after each of these epochs (comma-separated)",
+    )
+    parser.add_argument(
+        "--exit-after-epoch",
+        type=int,
+        default=None,
+        help="exit at the END of this epoch (after evaluation, LR step and resume save)",
     )
     # [new-arms] flags for the two ablation samplers
     parser.add_argument(

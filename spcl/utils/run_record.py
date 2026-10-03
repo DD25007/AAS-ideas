@@ -9,15 +9,33 @@ that file does not carry:
   * per-cycle cluster counts from each view, region count, and % images covered
   * the source dataset of both images of every queried pair
   * wall-clock and the exact args line
+  * provenance: git HEAD, a dirty flag, and -- when dirty -- the exact uncommitted patch,
+    plus the environment variables that decide which pairs get selected
 
 Written as JSON so a crashed run still leaves everything up to its last cycle.
 """
 
+import hashlib
 import json
 import os
+import socket
+import subprocess
 import sys
 import time
 from collections import Counter
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+# Anything that changes which pairs are selected or how the run schedules. PYTHONHASHSEED
+# in particular decides the AAS component order (see spcl/sampling/consistency.py).
+_ENV_KEYS = (
+    "PYTHONHASHSEED",
+    "CUDA_VISIBLE_DEVICES",
+    "OMP_NUM_THREADS",
+    "HITL_SORT_COMPONENTS",
+    "HITL_CUDNN_BENCHMARK",
+    "HITL_DEBUG_CHECKSUM",
+)
 
 
 class RunRecord:
@@ -32,6 +50,7 @@ class RunRecord:
             "args": {k: _plain(v) for k, v in vars(args).items()},
             "n_train": self.n_train,
             "total_edges": self.total_edges,
+            "provenance": provenance(folder),
             "cycles": [],
             "status": "running",
         }
@@ -64,6 +83,9 @@ class RunRecord:
                 if g("rec_cov") is not None else None
             ),
             "consumed_pct_of_all_pairs": 100.0 * consumed / self.total_edges,
+            # cumulative pair sets, order-free: two runs selected the same pairs iff equal
+            "ml_sha256": _pairs_sha(ml_pairs),
+            "cl_sha256": _pairs_sha(cl_pairs),
         }
         # Per-dataset allocation of the pairs queried so far. Counting both endpoints
         # is what "budget landed in dataset X" means; a cross-dataset pair contributes
@@ -101,6 +123,51 @@ class RunRecord:
         with open(tmp, "w") as fh:
             json.dump(self.d, fh, indent=1, default=_plain)
         os.replace(tmp, self.path)  # atomic: a killed run never leaves a torn file
+
+
+def _git(*a):
+    r = subprocess.run(("git", "-C", REPO) + a, capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or f"git {a[0]} failed")
+    return r.stdout
+
+
+def provenance(folder):
+    """git HEAD + dirty flag; when dirty, the uncommitted patch is saved next to the record.
+
+    Never raises: a run must not die because git is unavailable, but the failure is
+    recorded instead of being silently absent.
+    """
+    out = {
+        "hostname": socket.gethostname(),
+        "python": sys.executable,
+        "env": {k: os.environ.get(k) for k in _ENV_KEYS},
+    }
+    try:
+        out["git_head"] = _git("rev-parse", "HEAD").strip()
+        status = _git("status", "--porcelain").splitlines()
+        out["git_dirty"] = bool(status)
+        out["git_status"] = status
+        if status:
+            diff = _git("diff", "HEAD", "--binary")
+            out["git_diff_sha256"] = hashlib.sha256(diff.encode()).hexdigest()
+            patch = os.path.join(folder, "git_diff.patch")
+            with open(patch, "w") as fh:
+                fh.write(diff)
+            out["git_diff_path"] = patch
+            # untracked files are not in `git diff`; hash them so they are not invisible
+            out["git_untracked_sha256"] = {
+                f: hashlib.sha256(open(os.path.join(REPO, f), "rb").read()).hexdigest()
+                for f in _git("ls-files", "--others", "--exclude-standard").splitlines()
+            }
+    except Exception as e:  # noqa: BLE001 -- recorded, not swallowed
+        out["git_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
+def _pairs_sha(pairs):
+    canon = sorted((min(int(a), int(b)), max(int(a), int(b))) for a, b in pairs)
+    return hashlib.sha256(json.dumps(canon).encode()).hexdigest()
 
 
 def _plain(v):

@@ -10,6 +10,7 @@ The old checkout `/storage/dd25007/HITL-ReID` is not part of this work; do not e
 - **56.19 ± 0.25 macro mAP** (13 datasets): C0 = plain ConSam, `--deterministic --canonical-pairs --fast-rerank`,
   `--train-seed 0..3` (55.90–56.51), 67,314.5 human pairs on average (67,315 rounded; seed values 67,358 / 68,413 / 66,129 / 67,358).
 - 56.21 (sd 0.43): the non-deterministic 4-repeat figure in README.md (`outputs_final`). Judge new ideas against C0, not against it.
+- **Seed-0 reference for future comparisons: `/scratch/dd25007/AAS-ideas-out/P2b_full_gate`** (bit-identical to C0 s0, see the Phase 2b line below). Use it as the first argument of `scripts/compare_runs.py <ref> <new>`. The old C0 s0 run dir went away with the old checkout; its weights are in `/scratch/dd25007/archive/idea-1/runs/C0_consam_det/logs`.
 
 ## Working rules
 1. **Preregister before any run**: write the prereg (hypothesis, arms, seeds, decision rule), `sha256sum` it into a `.sha256.txt`, only then launch.

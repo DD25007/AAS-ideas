@@ -14,7 +14,7 @@ export CUDA_VISIBLE_DEVICES=$GPU
 . scripts/gpu_guard.sh                       # slot lock for this card, held until this script exits
 export PYTHONHASHSEED=0
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
-PY=/storage/dd25007/conda_envs/hitl/bin/python
+PY=${PY:-/storage/dd25007/conda_envs/hitl/bin/python}      # PY override is for tests only
 MAX_RESUMES=${MAX_RESUMES:-3}
 RESUME_EVERY=${RESUME_EVERY:-10,20,30,40}
 echo "gpu=$GPU run_dir=$RUN_DIR args: $*" > "$RUN_DIR/cmd.txt"
@@ -25,9 +25,18 @@ echo "[wrapper] $(date -Iseconds) launch pid=$$ gpu=$GPU git=$(git rev-parse --s
 while true; do
   ATTEMPT_LOG=$RUN_DIR/attempt_${ATTEMPT}.log
   echo "[wrapper] $(date -Iseconds) starting attempt $ATTEMPT (resume_arg='$RESUME_ARG')" >> "$WRAPPER_LOG"
-  $PY -u scripts/train_forkserver.py "$@" --logs-dir "$RUN_DIR/logs" --resume-save-epochs "$RESUME_EVERY" $RESUME_ARG 2>&1 \
-      | gawk '{ print strftime("%Y-%m-%dT%H:%M:%S"), $0; fflush(); }' > "$ATTEMPT_LOG"
-  EXIT=${PIPESTATUS[0]}
+  # No `python | gawk` pipeline: when the trainer is killed (e.g. a 24 h limit) its orphaned DataLoader workers keep the pipe open, gawk never
+  # sees EOF and the pipeline -- and so this loop -- hangs forever (seen in H1). With a process substitution the loop gets python's own status.
+  $PY -u scripts/train_forkserver.py "$@" --logs-dir "$RUN_DIR/logs" --resume-save-epochs "$RESUME_EVERY" $RESUME_ARG \
+      > >(gawk '{ print strftime("%Y-%m-%dT%H:%M:%S"), $0; fflush(); }' > "$ATTEMPT_LOG") 2>&1
+  EXIT=$?
+  sleep 5                                    # let gawk flush the tail of the log
+  # Remove this attempt's leftovers (orphaned loader workers / forkserver). Only when this script is its own session leader
+  # (launched with setsid), so a hand-started wrapper can never signal the user's shell.
+  MY_SID=$(ps -o sid= -p $$ | tr -d ' ')
+  if [ "$MY_SID" = "$$" ]; then
+    for p in $(ps -eo sid,pid | awk -v s="$MY_SID" -v me=$$ '$1==s && $2!=me {print $2}'); do kill -TERM "$p" 2>/dev/null; done
+  fi
   echo "[wrapper] $(date -Iseconds) attempt $ATTEMPT exited $EXIT" >> "$WRAPPER_LOG"
   if [ "$EXIT" -eq 0 ]; then
     echo "[wrapper] $(date -Iseconds) run finished successfully" >> "$WRAPPER_LOG"

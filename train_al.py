@@ -53,6 +53,7 @@ from utils import get_evaluation_results
 # --resume. Every entry point is a no-op when its flag is off (see infra/).
 from infra import determinism as _det
 from infra import fast_rerank as _fast
+from infra import oracle_merge as _oracle  # E1: --oracle-merge (default off; apply() returns its inputs untouched)
 from infra import resume as _resume
 from infra import state_saver as _save
 
@@ -715,6 +716,11 @@ def main_worker(args):
                         pseudo_labeled_dataset[i] = fname, label, cid
                         pseudo_labels[i] = label
 
+                # [oracle-merge] E1 upper bound (GT): merge units by majority identity; returns the inputs untouched unless --oracle-merge
+                pseudo_labels, pseudo_labeled_dataset = _oracle.apply(
+                    args, epoch, pseudo_labels, pseudo_labeled_dataset, sorted(dataset.train)
+                )
+
                 # statistics of clusters and un-clustered instances
                 index2label = collections.defaultdict(int)
                 for label in pseudo_labels:
@@ -1062,6 +1068,14 @@ if __name__ == "__main__":
         default=0,
         help="epoch of the first AL cycle; later cycles follow every --eval-step "
         "epochs (default 0)",
+    )
+    # [oracle-merge] E1: GT-based upper-bound probe, never a method. Default OFF = nothing changes.
+    parser.add_argument(
+        "--oracle-merge",
+        action="store_true",
+        default=False,
+        help="after each re-clustering (after NP3, before memory labels are set) merge all pseudo-label units whose majority GT identity "
+        "is the same (ties unchanged, no splits); uses GT, so it is an upper bound only (infra/oracle_merge.py)",
     )
     # Determinism and instrumentation; all default OFF (infra/determinism.py)
     parser.add_argument(

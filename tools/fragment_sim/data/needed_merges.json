@@ -1,0 +1,27 @@
+{
+ "definition": "needed merges = sum over GT identities of (#P units containing the identity - 1); P = D1 re-clustering (epoch 96) of consam_long, 2,506 units; 'recovered' in the simulators = reduction of that count",
+ "needed_by_dataset": {
+  "AmvrakikosTurtles": 6,
+  "CatIndividualImages": 554,
+  "Chicks4FreeID": 34,
+  "CowDataset": 18,
+  "DogFaceNet": 356,
+  "MPDD": 35,
+  "MultiCamCows2024": 102,
+  "PolarBearVidID": 88,
+  "PrimFace": 39,
+  "ReunionTurtles": 16,
+  "SeaStarReID2023": 117,
+  "SouthernProvinceTurtles": 25,
+  "ZakynthosTurtles": 8
+ },
+ "primary_datasets": [
+  "CatIndividualImages",
+  "MultiCamCows2024",
+  "PrimFace"
+ ],
+ "primary_needed": 695,
+ "secondary": {
+  "PolarBearVidID": 88
+ }
+}

@@ -54,6 +54,7 @@ from utils import get_evaluation_results
 from infra import determinism as _det
 from infra import fast_rerank as _fast
 from infra import oracle_merge as _oracle  # E1: --oracle-merge (default off; apply() returns its inputs untouched)
+from infra import merge_oracle as _merge  # D2.1: --merge-queries / --consam-cycle0-cut / --human-pair-cap (default off)
 from infra import resume as _resume
 from infra import state_saver as _save
 
@@ -214,6 +215,7 @@ def main():
     if args.stop_after_epoch is not None and not 0 <= args.stop_after_epoch < args.epochs:
         parser.error("--stop-after-epoch must satisfy 0 <= N < --epochs")
 
+    _merge.check_args(args, parser)  # [merge-oracle] no-op unless one of its flags is given
     if args.seed is not None:
         random.seed(args.seed)
         np.random.seed(args.seed)
@@ -369,6 +371,7 @@ def main_worker(args):
             pair_dataset=dataset_of_train_index(dataset),
         )
         del cluster_loader, features
+        _pair_ds = dataset_of_train_index(dataset) if _merge.any_flag(args) else None  # [merge-oracle]
 
         # Evaluator
         evaluator = Evaluator(model)
@@ -432,6 +435,8 @@ def main_worker(args):
                                         [int(x) for x in args.al_cycle_caps.split(",")][_cap_k])
                         print(f"[al-cycle-caps] cycle {_cap_k + 1} (epoch {epoch}): "
                               f"per-cycle budget = {sampler.n}", flush=True)
+                    # [merge-oracle] no-op unless --human-pair-cap
+                    _cap_log = _merge.limit_budget(args, sampler, epoch, len(sampler.ml_pairs) + len(sampler.cl_pairs))
                     if args.sampler == "None":
                         ml_pairs, cl_pairs = [], []
                     else:
@@ -440,6 +445,9 @@ def main_worker(args):
                             rerank_dist=rerank_dist,
                             gt_labels=gt_labels,
                         )
+                    # [merge-oracle] no-op unless --consam-cycle0-cut: drop the last K pairs of ConSam's first cycle, in its production order
+                    if args.consam_cycle0_cut and epoch == args.al_offset:
+                        _merge.cut_last(sampler, args.consam_cycle0_cut)
                     print("#Constraints:", len(ml_pairs) + len(cl_pairs))
                     print("#ML Constraints:", len(ml_pairs))
                     print("#CL Constraints:", len(cl_pairs))
@@ -702,6 +710,7 @@ def main_worker(args):
                     _ckpt(
                         f"epoch{epoch}_mlcl", np.array([len(ml_pairs), len(cl_pairs)])
                     )
+                    _pre_np3 = np.array(constrained_pseudo_labels) if _merge.active(args, epoch) else None  # [merge-oracle]
                     constrained_pseudo_labels = constrained_clustering(
                         np.array(constrained_pseudo_labels),
                         rerank_dist,
@@ -715,6 +724,30 @@ def main_worker(args):
                         fname, _, cid = pseudo_labeled_dataset[i]
                         pseudo_labeled_dataset[i] = fname, label, cid
                         pseudo_labels[i] = label
+                    # [merge-oracle] D2.1: extra merge questions after this cycle's ConSam answers and re-clustering; no-op unless --merge-queries
+                    if _merge.active(args, epoch):
+                        _units_before = len(np.unique(pseudo_labels.cpu().numpy()))
+                        _mfeat = F.normalize(memory.features.detach().float(), dim=1).cpu().numpy()
+                        _gt_ids = np.unique(np.array(gt_labels), return_inverse=True)[1]
+                        _ds_ids = np.unique(np.array(_pair_ds), return_inverse=True)[1]
+                        _t_merge = time.monotonic()
+                        _answers, _mstats = _merge.ask(pseudo_labels.cpu().numpy(), _mfeat, ml_pairs, cl_pairs, _gt_ids, _ds_ids, args.merge_q_per_cycle)
+                        assert ml_pairs is sampler.ml_pairs and cl_pairs is sampler.cl_pairs
+                        _merge.add_answers(sampler, _answers)
+                        constrained_pseudo_labels = constrained_clustering(
+                            _pre_np3.copy(), rerank_dist, "~DBSCAN", min_samples=4, ml_pairs=ml_pairs, cl_pairs=cl_pairs
+                        )
+                        for i, label in enumerate(constrained_pseudo_labels):
+                            fname, _, cid = pseudo_labeled_dataset[i]
+                            pseudo_labeled_dataset[i] = fname, label, cid
+                            pseudo_labels[i] = label
+                        _mstats["units_after"] = len(np.unique(pseudo_labels.cpu().numpy()))
+                        _mstats["units_before"] = _units_before
+                        _mstats["merge_step_seconds"] = round(time.monotonic() - _t_merge, 1)
+                        _mstats["by_dataset"] = {sorted(set(_pair_ds))[int(k)]: v for k, v in _mstats.pop("by_dataset_index").items()}
+                        _mstats["epoch"] = int(epoch)
+                        print("[merge-queries]", json.dumps(_mstats), flush=True)
+                        _merge.update_record(record, epoch, sampler, ml_pairs, cl_pairs, _mstats, _cap_log)
 
                 # [oracle-merge] E1 upper bound (GT): merge units by majority identity; returns the inputs untouched unless --oracle-merge
                 pseudo_labels, pseudo_labeled_dataset = _oracle.apply(
@@ -1077,6 +1110,21 @@ if __name__ == "__main__":
         help="after each re-clustering (after NP3, before memory labels are set) merge all pseudo-label units whose majority GT identity "
         "is the same (ties unchanged, no splits); uses GT, so it is an upper bound only (infra/oracle_merge.py)",
     )
+    # [merge-oracle] D2.1 bounded-oracle merge arm (GT used only to ORDER candidates; upper bound, not a method). All default OFF.
+    parser.add_argument(
+        "--merge-queries",
+        type=str,
+        default="off",
+        help="off | oracle20: extra human questions about pairs of pseudo-label units at the AL cycles in --merge-cycles "
+        "(infra/merge_oracle.py)",
+    )
+    parser.add_argument("--merge-q-per-cycle", type=int, default=1250, help="merge questions per merge cycle")
+    parser.add_argument("--merge-cycles", type=str, default="1,2,3,4",
+                        help="AL cycle indices (epoch = al_offset + k * eval_step) that get merge questions")
+    parser.add_argument("--consam-cycle0-cut", type=int, default=0,
+                        help="drop the last K pairs ConSam produced in its first cycle, in its production order")
+    parser.add_argument("--human-pair-cap", type=int, default=None,
+                        help="hard cap on all human pairs (ConSam + merge questions)")
     # Determinism and instrumentation; all default OFF (infra/determinism.py)
     parser.add_argument(
         "--deterministic",

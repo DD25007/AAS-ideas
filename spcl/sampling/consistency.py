@@ -54,6 +54,7 @@ class ConsistencySampling(BaseSampling):
         self.rec_n_finch = self.rec_n_regions = None
         self.rec_cov = None
         self.rec_shortfall = 0
+        self.last_selection_order = []  # [merge-oracle] (pair, is_ml) in the order this call produced them; bookkeeping only
         sim_thresh = self.args.consam_sim_thresh
         k_medoids = self.args.consam_k
         try:
@@ -406,6 +407,7 @@ class ConsistencySampling(BaseSampling):
                 selected_pairs.add(frozenset((pair[0], pair[1])))
                 self.all_selected_pairs.add(frozenset((pair[0], pair[1])))
                 valid = self.gt_labels[pair[0]] == self.gt_labels[pair[1]]
+                self.last_selection_order.append((frozenset((pair[0], pair[1])), bool(valid)))
                 if valid:
                     self.ml_pairs.append((pair[0], pair[1]))
                 else:
